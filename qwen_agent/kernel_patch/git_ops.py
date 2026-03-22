@@ -76,6 +76,10 @@ class KernelRepoManager:
         """解析任意 revision 到完整 commit id。"""
         return self.git('rev-parse', revision).strip()
 
+    def read_revision_file(self, revision: str, relative_path: str) -> str:
+        """读取某个 revision 下的文件文本。"""
+        return self.git('show', f'{revision}:{relative_path}', timeout=120)
+
     def parent_commit(self, commit: str) -> str:
         """获取 commit 的父提交。"""
         return self.rev_parse(f'{commit}^')
@@ -334,6 +338,12 @@ class KernelRepoManager:
         """根据 case slug 计算工作树路径。"""
         return self.worktree_root / bundle.case.slug
 
+    def detached_worktree_path(self, name: str) -> Path:
+        """根据任意名称计算 detached worktree 路径。"""
+        safe = re.sub(r'[^A-Za-z0-9_.-]+', '_', name.strip()).strip('._')
+        safe = safe or 'autopatch'
+        return self.worktree_root / safe
+
     def remove_worktree(self, worktree_path: Path) -> None:
         """安全移除工作树目录并清理 git worktree 元数据。"""
         if worktree_path.exists():
@@ -357,6 +367,20 @@ class KernelRepoManager:
                       cwd=self.repo_root,
                       timeout=240)
         self.reset_worktree(worktree_path, bundle.base_commit)
+        return worktree_path
+
+    def create_detached_worktree(self, revision: str, name: str, recreate: bool = False) -> Path:
+        """创建（或复用）指向任意 revision 的 detached worktree。"""
+        resolved_revision = self.rev_parse(revision)
+        worktree_path = self.detached_worktree_path(name)
+        if recreate:
+            self.remove_worktree(worktree_path)
+        if not worktree_path.exists():
+            logger.info(f'Creating generic worktree {worktree_path} at {resolved_revision}')
+            self._run(['git', 'worktree', 'add', '--detach', str(worktree_path), resolved_revision],
+                      cwd=self.repo_root,
+                      timeout=240)
+        self.reset_worktree(worktree_path, resolved_revision)
         return worktree_path
 
     def reset_worktree(self, worktree_path: Path, base_commit: str) -> None:

@@ -14,11 +14,13 @@
 
 from qwen_agent.agent import Agent, BasicAgent
 
+from .closed_loop_kernel_patch_agent import ClosedLoopKernelPatchAgent
 from .fncall_agent import FnCallAgent
 from .kernel_patch_agent import KernelPatchAgent
 
 __all__ = [
     'Agent',
     'BasicAgent',
+    'ClosedLoopKernelPatchAgent',
     'KernelPatchAgent',
 ]

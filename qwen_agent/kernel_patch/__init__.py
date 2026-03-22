@@ -9,10 +9,14 @@ from .compile_validator import KernelCompileValidator
 from .cases import load_patch_cases
 from .evaluator import PatchEvaluator
 from .edit_units import build_prefetched_context, parse_edit_units, summarize_edit_units
+from .autopatch import ClosedLoopPatchPipeline, HeuristicCandidateRetriever, LLMJsonPatchReasoner, LocalContextAssembler
+from .autopatch_models import (AutoPatchResult, InsertionAnchor, PatchContext, PatchEdit, PatchPlan,
+                               PatchValidationOutcome, RetrievalCandidate, SearchHit, SnippetMatch, VulnerabilityInput)
 from .git_ops import KernelRepoManager
 from .models import (CaseClassification, CaseRunResult, CodeBlock, CompileValidationResult, EditUnit, FileBlockIndex,
                      KernelCaseBundle, PatchCandidate, PatchCase, PatchEvaluation)
 from .prompt_tuner import PromptProfile, load_prompt_profile
+from .repo_access import LocalRepoMCPClient
 
 __all__ = [
     'PatchCase',
@@ -28,6 +32,21 @@ __all__ = [
     'KernelRepoManager',
     'PatchEvaluator',
     'KernelCompileValidator',
+    'VulnerabilityInput',
+    'SearchHit',
+    'SnippetMatch',
+    'InsertionAnchor',
+    'RetrievalCandidate',
+    'PatchContext',
+    'PatchEdit',
+    'PatchPlan',
+    'PatchValidationOutcome',
+    'AutoPatchResult',
+    'LocalRepoMCPClient',
+    'HeuristicCandidateRetriever',
+    'LocalContextAssembler',
+    'LLMJsonPatchReasoner',
+    'ClosedLoopPatchPipeline',
     'PromptProfile',
     'classify_case',
     'parse_edit_units',

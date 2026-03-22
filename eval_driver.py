@@ -4,8 +4,10 @@ import os
 from pathlib import Path
 from typing import List
 
+from qwen_agent.agents.closed_loop_kernel_patch_agent import ClosedLoopKernelPatchAgent
 from qwen_agent.agents.kernel_patch_agent import KernelPatchAgent
-from qwen_agent.kernel_patch import CaseRunResult, KernelRepoManager, PatchEvaluator, load_patch_cases, load_prompt_profile
+from qwen_agent.kernel_patch import (CaseRunResult, KernelRepoManager, PatchEvaluator, VulnerabilityInput,
+                                     load_patch_cases, load_prompt_profile)
 from qwen_agent.kernel_patch.compile_validator import KernelCompileValidator
 from qwen_agent.log import configure_logger, logger
 
@@ -19,6 +21,7 @@ def parse_args():
     parser.add_argument('--api-base', default='https://api.apiqik.online/v1')
     parser.add_argument('--api-key', default='')
     parser.add_argument('--api-key-env', default='OPENAI_API_KEY')
+    parser.add_argument('--agent-type', choices=['kernel_patch', 'closed_loop'], default='kernel_patch')
     parser.add_argument('--cve-id', default='')
     parser.add_argument('--limit', type=int, default=1)
     parser.add_argument('--max-attempts', type=int, default=2)
@@ -82,6 +85,24 @@ def select_learning_evaluation(results: List):
     return results[-1]
 
 
+def build_vulnerability_input(bundle: object, repo_manager: KernelRepoManager, worktree_path: Path) -> VulnerabilityInput:
+    current_context = repo_manager.current_hunk_context(bundle, worktree_path, context_before=10, context_after=30)
+    subsystem_hints = sorted({path.split('/', 1)[0] for path in bundle.changed_files if '/' in path})[:3]
+    metadata = {
+        'cve_id': bundle.case.cve_id,
+        'base_commit': bundle.base_commit,
+        'fix_commit': bundle.fix_commit,
+        'changed_files': bundle.changed_files,
+    }
+    return VulnerabilityInput(title=bundle.commit_subject,
+                              description='\n\n'.join(
+                                  section for section in [bundle.commit_message, bundle.diff_stat, current_context]
+                                  if section.strip()),
+                              subsystem_hints=subsystem_hints,
+                              file_hints=bundle.changed_files[:5],
+                              metadata=metadata)
+
+
 def main():
     args = parse_args()
     log_level = args.log_level or ('DEBUG' if args.debug else None)
@@ -97,7 +118,10 @@ def main():
     evaluator = PatchEvaluator(repo_manager,
                                feedback_style=args.feedback_style,
                                compile_validator=compile_validator)
-    agent = KernelPatchAgent(llm=llm_cfg, repo_manager=repo_manager, prompt_profile=prompt_profile)
+    if args.agent_type == 'kernel_patch':
+        agent = KernelPatchAgent(llm=llm_cfg, repo_manager=repo_manager, prompt_profile=prompt_profile)
+    else:
+        agent = ClosedLoopKernelPatchAgent(llm=llm_cfg, repo_manager=repo_manager, compile_validator=compile_validator)
 
     cases = load_patch_cases(args.cases_file, cve_filter=args.cve_id or None, limit=args.limit)
     if not cases:
@@ -117,7 +141,16 @@ def main():
             for attempt in range(1, args.max_attempts + 1):
                 attempt_dir = bundle.artifact_dir / f'attempt_{attempt:02d}'
                 repo_manager.reset_worktree(worktree_path, bundle.base_commit)
-                candidate = agent.generate_candidate(bundle, worktree_path, feedback_text=feedback_text)
+                if args.agent_type == 'kernel_patch':
+                    candidate = agent.generate_candidate(bundle, worktree_path, feedback_text=feedback_text)
+                else:
+                    vulnerability = build_vulnerability_input(bundle, repo_manager, worktree_path)
+                    closed_loop_result = agent.run(vulnerability=vulnerability,
+                                                   worktree_path=worktree_path,
+                                                   session_name=f'{case.slug}__attempt_{attempt:02d}',
+                                                   max_iterations=1)
+                    candidate = closed_loop_result.candidate
+                    repo_manager.reset_worktree(worktree_path, bundle.base_commit)
                 evaluation = evaluator.evaluate(bundle, worktree_path, candidate.patch_text or '', attempt_dir)
                 save_attempt_files(attempt_dir, candidate, evaluation)
                 case_results.append(evaluation)
@@ -137,8 +170,9 @@ def main():
                                    best_similarity=best_similarity,
                                    artifact_dir=bundle.artifact_dir,
                                    evaluations=case_results)
-        prompt_profile.observe(select_learning_evaluation(case_results))
-        prompt_profile.save(prompt_profile_path)
+        if args.agent_type == 'kernel_patch':
+            prompt_profile.observe(select_learning_evaluation(case_results))
+            prompt_profile.save(prompt_profile_path)
         with summary_path.open('a', encoding='utf-8') as fp:
             fp.write(run_result.to_json() + '\n')
 

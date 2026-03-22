@@ -15,17 +15,68 @@
 import copy
 from typing import Union
 
-from .azure import TextChatAtAzure
 from .base import LLM_REGISTRY, BaseChatModel, ModelServiceError
-from .oai import TextChatAtOAI
-from .openvino import OpenVINO
-from .qwen_dashscope import QwenChatAtDS
-from .qwenaudio_dashscope import QwenAudioChatAtDS
-from .qwenomni_oai import QwenOmniChatAtOAI
-from .qwenvl_dashscope import QwenVLChatAtDS
-from .qwenvl_oai import QwenVLChatAtOAI
-from .qwenvlo_dashscope import QwenVLoChatAtDS
-from .transformers_llm import Transformers
+
+TextChatAtAzure = None
+TextChatAtOAI = None
+OpenVINO = None
+QwenChatAtDS = None
+QwenAudioChatAtDS = None
+QwenOmniChatAtOAI = None
+QwenVLChatAtDS = None
+QwenVLChatAtOAI = None
+QwenVLoChatAtDS = None
+Transformers = None
+
+try:
+    from .azure import TextChatAtAzure
+except ImportError:
+    pass
+
+try:
+    from .oai import TextChatAtOAI
+except ImportError:
+    pass
+
+try:
+    from .openvino import OpenVINO
+except ImportError:
+    pass
+
+try:
+    from .qwen_dashscope import QwenChatAtDS
+except ImportError:
+    pass
+
+try:
+    from .qwenaudio_dashscope import QwenAudioChatAtDS
+except ImportError:
+    pass
+
+try:
+    from .qwenomni_oai import QwenOmniChatAtOAI
+except ImportError:
+    pass
+
+try:
+    from .qwenvl_dashscope import QwenVLChatAtDS
+except ImportError:
+    pass
+
+try:
+    from .qwenvl_oai import QwenVLChatAtOAI
+except ImportError:
+    pass
+
+try:
+    from .qwenvlo_dashscope import QwenVLoChatAtDS
+except ImportError:
+    pass
+
+try:
+    from .transformers_llm import Transformers
+except ImportError:
+    pass
 
 
 def get_chat_model(cfg: Union[dict, str] = 'qwen-plus') -> BaseChatModel:
