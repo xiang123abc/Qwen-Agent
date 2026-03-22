@@ -1,3 +1,8 @@
+"""提示词调优器。
+
+根据历史评估结果累计规则得分，把有效的修复启发式动态注入系统提示词。
+"""
+
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -23,15 +28,18 @@ RULE_LIBRARY = {
 
 @dataclass
 class PromptProfile:
+    """可持久化的提示词画像。"""
     version: int = 1
     rule_scores: Dict[str, int] = field(default_factory=dict)
     observations: List[dict] = field(default_factory=list)
 
     def render_rules(self, max_rules: int = 5) -> List[str]:
+        """按分数排序输出最高优先级规则文本。"""
         ranked = sorted(self.rule_scores.items(), key=lambda item: (-item[1], item[0]))
         return [RULE_LIBRARY[key] for key, _ in ranked[:max_rules] if key in RULE_LIBRARY]
 
     def observe(self, evaluation: PatchEvaluation) -> None:
+        """根据一次评估结果更新规则分数与观察记录。"""
         rules = []
         if not evaluation.patch_found:
             rules.extend(['strict_patch_format', 'tool_driven_validation'])
@@ -42,6 +50,7 @@ class PromptProfile:
         if evaluation.tree_match:
             rules.append('tool_driven_validation')
 
+        # 规则按命中次数累加，形成简单在线学习效果。
         for rule in rules:
             self.rule_scores[rule] = self.rule_scores.get(rule, 0) + 1
         self.observations.append({
@@ -53,11 +62,13 @@ class PromptProfile:
         self.version += 1
 
     def save(self, path: Path) -> None:
+        """保存 PromptProfile 到 JSON 文件。"""
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(asdict(self), ensure_ascii=False, indent=2), encoding='utf-8')
 
 
 def load_prompt_profile(path: str) -> PromptProfile:
+    """从 JSON 文件加载 PromptProfile；不存在时返回默认配置。"""
     profile_path = Path(path)
     if not profile_path.exists():
         return PromptProfile()

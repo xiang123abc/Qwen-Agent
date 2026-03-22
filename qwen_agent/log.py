@@ -16,22 +16,45 @@ import logging
 import os
 
 
-def setup_logger(level=None):
+def _coerce_log_level(level=None):
     if level is None:
+        env_level = os.getenv('QWEN_AGENT_LOG_LEVEL', '').strip().upper()
+        if env_level:
+            return getattr(logging, env_level, logging.INFO)
         if os.getenv('QWEN_AGENT_DEBUG', '0').strip().lower() in ('1', 'true'):
-            level = logging.DEBUG
-        else:
-            level = logging.INFO
+            return logging.DEBUG
+        return logging.INFO
+    if isinstance(level, str):
+        return getattr(logging, level.strip().upper(), logging.INFO)
+    return level
+
+
+def setup_logger(level=None, log_file=None):
+    level = _coerce_log_level(level)
 
     handler = logging.StreamHandler()
-    # Do not run handler.setLevel(level) so that users can change the level via logger.setLevel later
     formatter = logging.Formatter('%(asctime)s - %(filename)s - %(lineno)d - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
 
     _logger = logging.getLogger('qwen_agent_logger')
+    _logger.propagate = False
     _logger.setLevel(level)
-    _logger.addHandler(handler)
+
+    if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler) for h in _logger.handlers):
+        _logger.addHandler(handler)
+
+    if log_file:
+        abs_log_file = os.path.abspath(log_file)
+        if not any(isinstance(h, logging.FileHandler) and getattr(h, 'baseFilename', None) == abs_log_file
+                   for h in _logger.handlers):
+            file_handler = logging.FileHandler(abs_log_file, encoding='utf-8')
+            file_handler.setFormatter(formatter)
+            _logger.addHandler(file_handler)
     return _logger
 
 
 logger = setup_logger()
+
+
+def configure_logger(level=None, log_file=None):
+    return setup_logger(level=level, log_file=log_file)

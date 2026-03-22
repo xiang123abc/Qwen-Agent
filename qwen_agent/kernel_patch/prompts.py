@@ -1,3 +1,5 @@
+"""kernel patch 任务提示词模板。"""
+
 from typing import Iterable
 
 from .models import KernelCaseBundle
@@ -29,6 +31,12 @@ Focused files from the community fix:
 
 Community diff stat:
 {diff_stat}
+
+Case classification:
+{case_classification}
+
+Edit units:
+{edit_unit_summary}
 
 Reference material from `git show -W {fix_commit}`:
 {reference_show_excerpt}
@@ -64,6 +72,12 @@ Analysis:
 Additional retry feedback:
 {feedback_text}
 
+Case classification:
+{case_classification}
+
+Edit units:
+{edit_unit_summary}
+
 Current parent-worktree excerpts:
 {current_context_excerpt}
 
@@ -81,13 +95,18 @@ Requirements:
 
 
 def render_system_prompt(extra_rules: Iterable[str]) -> str:
+    """拼接基础系统提示词与动态学习规则。"""
     extra = [rule.strip() for rule in extra_rules if rule and rule.strip()]
     if not extra:
         return BASE_SYSTEM_PROMPT
     return BASE_SYSTEM_PROMPT + '\nLearned repair heuristics:\n' + '\n'.join(f'- {rule}' for rule in extra)
 
 
-def build_analysis_prompt(bundle: KernelCaseBundle, current_context_excerpt: str) -> str:
+def build_analysis_prompt(bundle: KernelCaseBundle,
+                          current_context_excerpt: str,
+                          case_classification: str,
+                          edit_unit_summary: str) -> str:
+    """构建分析阶段 prompt。"""
     changed_files = '\n'.join(f'- {path}' for path in bundle.changed_files) or '- (no changed files reported)'
     return ANALYSIS_PROMPT_TEMPLATE.format(cve_id=bundle.case.cve_id,
                                            base_commit=bundle.base_commit,
@@ -95,12 +114,21 @@ def build_analysis_prompt(bundle: KernelCaseBundle, current_context_excerpt: str
                                            commit_subject=bundle.commit_subject,
                                            changed_files=changed_files,
                                            diff_stat=bundle.diff_stat or '(empty)',
+                                           case_classification=case_classification.strip() or '(unknown)',
+                                           edit_unit_summary=edit_unit_summary.strip() or '(none)',
                                            reference_show_excerpt=bundle.reference_show_excerpt.strip() or '(empty)',
                                            community_patch_excerpt=bundle.community_patch_excerpt.strip() or '(empty)',
                                            current_context_excerpt=current_context_excerpt.strip() or '(empty)')
 
 
-def build_patch_prompt(analysis_text: str, current_context_excerpt: str, feedback_text: str = '') -> str:
+def build_patch_prompt(analysis_text: str,
+                       current_context_excerpt: str,
+                       case_classification: str,
+                       edit_unit_summary: str,
+                       feedback_text: str = '') -> str:
+    """构建补丁生成阶段 prompt。"""
     return PATCH_PROMPT_TEMPLATE.format(analysis_text=analysis_text.strip() or '(analysis unavailable)',
                                         feedback_text=feedback_text.strip() or '(none)',
+                                        case_classification=case_classification.strip() or '(unknown)',
+                                        edit_unit_summary=edit_unit_summary.strip() or '(none)',
                                         current_context_excerpt=current_context_excerpt.strip() or '(empty)')

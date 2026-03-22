@@ -6,7 +6,8 @@ from typing import List
 
 from qwen_agent.agents.kernel_patch_agent import KernelPatchAgent
 from qwen_agent.kernel_patch import CaseRunResult, KernelRepoManager, PatchEvaluator, load_patch_cases, load_prompt_profile
-from qwen_agent.log import logger
+from qwen_agent.kernel_patch.compile_validator import KernelCompileValidator
+from qwen_agent.log import configure_logger, logger
 
 
 def parse_args():
@@ -24,6 +25,10 @@ def parse_args():
     parser.add_argument('--max-input-tokens', type=int, default=64000)
     parser.add_argument('--temperature', type=float, default=0.1)
     parser.add_argument('--feedback-style', choices=['summary', 'full_diff'], default='summary')
+    parser.add_argument('--compile-validation', action='store_true')
+    parser.add_argument('--log-level', default='')
+    parser.add_argument('--log-file', default='')
+    parser.add_argument('--debug', action='store_true')
     parser.add_argument('--keep-worktrees', action='store_true')
     parser.add_argument('--recreate-worktrees', action='store_true')
     return parser.parse_args()
@@ -79,6 +84,8 @@ def select_learning_evaluation(results: List):
 
 def main():
     args = parse_args()
+    log_level = args.log_level or ('DEBUG' if args.debug else None)
+    configure_logger(level=log_level, log_file=args.log_file or None)
     workspace_root = Path(args.workspace_root).resolve()
     workspace_root.mkdir(parents=True, exist_ok=True)
 
@@ -86,7 +93,10 @@ def main():
     prompt_profile = load_prompt_profile(str(prompt_profile_path))
     llm_cfg = build_llm_cfg(args)
     repo_manager = KernelRepoManager(repo_root=args.repo_root, workspace_root=str(workspace_root))
-    evaluator = PatchEvaluator(repo_manager, feedback_style=args.feedback_style)
+    compile_validator = KernelCompileValidator(args.repo_root) if args.compile_validation else None
+    evaluator = PatchEvaluator(repo_manager,
+                               feedback_style=args.feedback_style,
+                               compile_validator=compile_validator)
     agent = KernelPatchAgent(llm=llm_cfg, repo_manager=repo_manager, prompt_profile=prompt_profile)
 
     cases = load_patch_cases(args.cases_file, cve_filter=args.cve_id or None, limit=args.limit)

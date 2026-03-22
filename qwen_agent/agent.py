@@ -167,6 +167,9 @@ class Agent(ABC):
         Yields:
             The response generator of LLM.
         """
+        if logger.isEnabledFor(10):
+            function_names = [fn.get('name', '<unknown>') for fn in (functions or [])]
+            logger.debug(f'Calling LLM with {len(messages)} messages; functions={function_names}')
         return self.llm.chat(messages=messages,
                              functions=functions,
                              stream=stream,
@@ -188,6 +191,11 @@ class Agent(ABC):
         if tool_name not in self.function_map:
             return f'Tool {tool_name} does not exists.'
         tool = self.function_map[tool_name]
+        if logger.isEnabledFor(20):
+            preview = str(tool_args)
+            if len(preview) > 1000:
+                preview = preview[:1000] + '\n...[TRUNCATED]'
+            logger.info(f'Tool call start: {tool_name}\nArgs:\n{preview}')
         try:
             tool_result = tool.call(tool_args, **kwargs)
         except (ToolServiceError, DocParserError) as ex:
@@ -201,6 +209,12 @@ class Agent(ABC):
                             f'Traceback:\n{traceback_info}'
             logger.warning(error_message)
             return error_message
+
+        if logger.isEnabledFor(20):
+            preview = str(tool_result)
+            if len(preview) > 1000:
+                preview = preview[:1000] + '\n...[TRUNCATED]'
+            logger.info(f'Tool call finish: {tool_name}\nResult:\n{preview}')
 
         if isinstance(tool_result, str):
             return tool_result

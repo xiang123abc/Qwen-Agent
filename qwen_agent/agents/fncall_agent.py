@@ -21,6 +21,7 @@ from qwen_agent.llm.schema import DEFAULT_SYSTEM_MESSAGE, FUNCTION, Message
 from qwen_agent.memory import Memory
 from qwen_agent.settings import MAX_LLM_CALL_PER_RUN
 from qwen_agent.tools import BaseTool
+from qwen_agent.log import logger
 from qwen_agent.utils.utils import extract_files_from_messages
 
 
@@ -94,6 +95,7 @@ class FnCallAgent(Agent):
                 for out in output:
                     use_tool, tool_name, tool_args, _ = self._detect_tool(out)
                     if use_tool:
+                        logger.info(f'LLM requested tool `{tool_name}`')
                         tool_result = self._call_tool(tool_name, tool_args, messages=messages, **kwargs)
                         fn_msg = Message(role=FUNCTION,
                                          name=tool_name,
