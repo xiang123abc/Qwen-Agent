@@ -20,7 +20,6 @@ from pydantic import BaseModel
 from qwen_agent.log import logger
 from qwen_agent.settings import DEFAULT_MAX_REF_TOKEN
 from qwen_agent.tools.base import BaseTool
-from qwen_agent.tools.doc_parser import DocParser, Record
 from qwen_agent.utils.tokenization_qwen import count_tokens, tokenizer
 
 

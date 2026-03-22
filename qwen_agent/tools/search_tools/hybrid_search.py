@@ -16,7 +16,6 @@ from typing import Dict, List, Optional, Tuple
 
 from qwen_agent.settings import DEFAULT_RAG_SEARCHERS
 from qwen_agent.tools.base import TOOL_REGISTRY, register_tool
-from qwen_agent.tools.doc_parser import Record
 from qwen_agent.tools.search_tools.base_search import BaseSearch
 from qwen_agent.tools.search_tools.front_page_search import POSITIVE_INFINITY
 

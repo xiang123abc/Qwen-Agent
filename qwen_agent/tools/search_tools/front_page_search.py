@@ -17,7 +17,6 @@ from typing import List, Tuple
 
 from qwen_agent.settings import DEFAULT_MAX_REF_TOKEN
 from qwen_agent.tools.base import register_tool
-from qwen_agent.tools.doc_parser import Record
 from qwen_agent.tools.search_tools.base_search import BaseSearch
 
 POSITIVE_INFINITY = math.inf

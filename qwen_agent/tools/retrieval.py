@@ -18,8 +18,6 @@ import json5
 
 from qwen_agent.settings import DEFAULT_MAX_REF_TOKEN, DEFAULT_PARSER_PAGE_SIZE, DEFAULT_RAG_SEARCHERS
 from qwen_agent.tools.base import TOOL_REGISTRY, BaseTool, register_tool
-from qwen_agent.tools.doc_parser import DocParser, Record
-from qwen_agent.tools.simple_doc_parser import PARSER_SUPPORTED_FILE_TYPES
 
 
 def _check_deps_for_rag():

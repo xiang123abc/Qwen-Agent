@@ -15,7 +15,6 @@
 from typing import Union
 
 from qwen_agent.tools.base import BaseTool, register_tool
-from qwen_agent.tools.simple_doc_parser import SimpleDocParser
 
 
 @register_tool('web_extractor')

@@ -25,7 +25,6 @@ from qwen_agent.log import logger
 from qwen_agent.settings import (DEFAULT_MAX_REF_TOKEN, DEFAULT_PARSER_PAGE_SIZE, DEFAULT_RAG_KEYGEN_STRATEGY,
                                  DEFAULT_RAG_SEARCHERS)
 from qwen_agent.tools import BaseTool
-from qwen_agent.tools.simple_doc_parser import PARSER_SUPPORTED_FILE_TYPES
 from qwen_agent.utils.utils import extract_files_from_messages, extract_text_from_message, get_file_type
 
 
@@ -63,16 +62,7 @@ class Memory(Agent):
             self.rag_keygen_strategy = 'none'
 
         function_list = function_list or []
-        super().__init__(function_list=[{
-            'name': 'retrieval',
-            'max_ref_token': self.max_ref_token,
-            'parser_page_size': self.parser_page_size,
-            'rag_searchers': self.rag_searchers,
-        }, {
-            'name': 'doc_parser',
-            'max_ref_token': self.max_ref_token,
-            'parser_page_size': self.parser_page_size,
-        }] + function_list,
+        super().__init__(function_list=[] + function_list,
                          llm=llm,
                          system_message=system_message)
 
