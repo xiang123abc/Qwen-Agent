@@ -17,7 +17,7 @@ def parse_args():
     parser.add_argument('--workspace-root', default='workspace/kernel_patch_eval')
     parser.add_argument('--model', default='qwen3-235b-a22b-thinking-2507')
     parser.add_argument('--api-base', default='https://api.apiqik.online/v1')
-    parser.add_argument('--api-key', default='sk-hTsLGwaqMw4eSgWq2E5W9j3FRoLmE66uakp3ub9lI3Az0L7L')
+    parser.add_argument('--api-key', default='')
     parser.add_argument('--api-key-env', default='OPENAI_API_KEY')
     parser.add_argument('--cve-id', default='')
     parser.add_argument('--limit', type=int, default=1)
