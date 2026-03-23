@@ -29,11 +29,6 @@ QwenVLoChatAtDS = None
 Transformers = None
 
 try:
-    from .azure import TextChatAtAzure
-except ImportError:
-    pass
-
-try:
     from .oai import TextChatAtOAI
 except ImportError:
     pass

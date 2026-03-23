@@ -20,7 +20,5 @@ from .kernel_patch_agent import KernelPatchAgent
 
 __all__ = [
     'Agent',
-    'BasicAgent',
-    'ClosedLoopKernelPatchAgent',
-    'KernelPatchAgent',
+    'BasicAgent'
 ]
