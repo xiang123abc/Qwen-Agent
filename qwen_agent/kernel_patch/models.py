@@ -124,7 +124,13 @@ class EditUnit:
     new_count: int
     anchor_before: str = ''
     anchor_after: str = ''
+    target_snippet: str = ''
+    before_snippet: str = ''
+    after_snippet: str = ''
     patch_excerpt: str = ''
+    resolved_start_line: int = 0
+    resolved_end_line: int = 0
+    alignment_score: float = 0.0
     notes: List[str] = field(default_factory=list)
 
 

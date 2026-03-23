@@ -72,6 +72,41 @@ def _summarize_hunk(hunk_lines: List[str], max_lines: int = 20) -> str:
     return '\n'.join(snippet)
 
 
+def _line_payload(line: str) -> str:
+    return line[1:] if line and line[0] in (' ', '+', '-') else line
+
+
+def _extract_target_snippet(hunk_lines: List[str], prefix: str) -> str:
+    lines = [_line_payload(line) for line in hunk_lines if line.startswith(prefix)]
+    return '\n'.join(lines).rstrip()
+
+
+def _extract_anchor_snippets(hunk_lines: List[str], radius: int = 2) -> tuple[str, str]:
+    changed_indices = [idx for idx, line in enumerate(hunk_lines) if line.startswith(('+', '-'))]
+    if not changed_indices:
+        return '', ''
+
+    first = changed_indices[0]
+    last = changed_indices[-1]
+    before_lines = []
+    after_lines = []
+
+    for idx in range(first - 1, -1, -1):
+        if hunk_lines[idx].startswith(' '):
+            before_lines.append(_line_payload(hunk_lines[idx]))
+            if len(before_lines) >= radius:
+                break
+    before_lines.reverse()
+
+    for idx in range(last + 1, len(hunk_lines)):
+        if hunk_lines[idx].startswith(' '):
+            after_lines.append(_line_payload(hunk_lines[idx]))
+            if len(after_lines) >= radius:
+                break
+
+    return '\n'.join(before_lines).rstrip(), '\n'.join(after_lines).rstrip()
+
+
 def parse_edit_units(bundle: KernelCaseBundle, repo_manager, worktree_path) -> List[EditUnit]:
     """解析社区 patch，构建 EditUnit 列表。"""
     units = OrderedDict()
@@ -86,6 +121,9 @@ def parse_edit_units(bundle: KernelCaseBundle, repo_manager, worktree_path) -> L
                     new_count: int,
                     anchor_before: str,
                     anchor_after: str,
+                    target_snippet: str,
+                    before_snippet: str,
+                    after_snippet: str,
                     patch_excerpt: str,
                     notes: List[str]):
         """插入或合并同键 EditUnit，避免同一语义片段重复。"""
@@ -103,6 +141,9 @@ def parse_edit_units(bundle: KernelCaseBundle, repo_manager, worktree_path) -> L
                                   new_count=new_count,
                                   anchor_before=anchor_before,
                                   anchor_after=anchor_after,
+                                  target_snippet=target_snippet,
+                                  before_snippet=before_snippet,
+                                  after_snippet=after_snippet,
                                   patch_excerpt=patch_excerpt,
                                   notes=list(notes))
         else:
@@ -111,6 +152,12 @@ def parse_edit_units(bundle: KernelCaseBundle, repo_manager, worktree_path) -> L
             existing.new_start = min(existing.new_start, new_start)
             existing.old_count += old_count
             existing.new_count += new_count
+            if target_snippet and not existing.target_snippet:
+                existing.target_snippet = target_snippet
+            if before_snippet and not existing.before_snippet:
+                existing.before_snippet = before_snippet
+            if after_snippet and not existing.after_snippet:
+                existing.after_snippet = after_snippet
             existing.patch_excerpt += '\n\n' + patch_excerpt
             existing.notes.extend(note for note in notes if note not in existing.notes)
 
@@ -144,6 +191,8 @@ def parse_edit_units(bundle: KernelCaseBundle, repo_manager, worktree_path) -> L
             j += 1
 
         removed_lines = [hunk_line for hunk_line in hunk_lines if hunk_line.startswith('-')]
+        target_snippet = _extract_target_snippet(hunk_lines, '-')
+        before_snippet, after_snippet = _extract_anchor_snippets(hunk_lines)
         patch_excerpt = '@@ -{0},{1} +{2},{3} @@\n{4}'.format(
             old_start, old_count, new_start, new_count, _summarize_hunk(hunk_lines))
 
@@ -173,6 +222,9 @@ def parse_edit_units(bundle: KernelCaseBundle, repo_manager, worktree_path) -> L
                             new_count,
                             before.name if before else '',
                             after.name if after else '',
+                            target_snippet,
+                            before_snippet,
+                            after_snippet,
                             patch_excerpt,
                             [])
         # 2) 有删除但没有命中原块：回退为基于新增内容的符号推断。
@@ -189,6 +241,9 @@ def parse_edit_units(bundle: KernelCaseBundle, repo_manager, worktree_path) -> L
                         new_count,
                         before.name if before else '',
                         after.name if after else '',
+                        target_snippet,
+                        before_snippet,
+                        after_snippet,
                         patch_excerpt,
                         ['No overlapping block found; using inferred symbol.'])
 
@@ -211,6 +266,9 @@ def parse_edit_units(bundle: KernelCaseBundle, repo_manager, worktree_path) -> L
                         new_count,
                         before.name if before else '',
                         after.name if after else '',
+                        target_snippet,
+                        before_snippet,
+                        after_snippet,
                         patch_excerpt,
                         notes)
 
@@ -228,6 +286,9 @@ def parse_edit_units(bundle: KernelCaseBundle, repo_manager, worktree_path) -> L
                         new_count,
                         before.name if before else '',
                         after.name if after else '',
+                        target_snippet,
+                        before_snippet,
+                        after_snippet,
                         patch_excerpt,
                         ['Target symbol missing in parent tree; treat as insertion.'])
         i = j

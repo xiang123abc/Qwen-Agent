@@ -17,6 +17,7 @@ import logging
 import os
 from pprint import pformat
 from typing import Dict, Iterator, List, Optional
+from urllib.parse import urlparse, urlunparse
 
 import openai
 
@@ -33,6 +34,31 @@ from qwen_agent.llm.schema import ASSISTANT, FunctionCall, Message
 from qwen_agent.log import logger
 
 
+def _normalize_oai_base_url(api_base: str) -> str:
+    """Normalize OpenAI-compatible base URLs.
+
+    Some gateways expose the management UI at `/` and the compatible API at `/v1`.
+    If the caller passes a bare origin such as `https://host.example`, append `/v1`.
+    """
+    normalized = (api_base or '').strip()
+    if not normalized:
+        return normalized
+    parsed = urlparse(normalized)
+    path = parsed.path.rstrip('/')
+    if path in ('', '/'):
+        parsed = parsed._replace(path='/v1')
+        return urlunparse(parsed)
+    return normalized
+
+
+def _ensure_structured_response(response, source: str):
+    """Reject plain-text / HTML gateway responses early with a clear error."""
+    if isinstance(response, str):
+        preview = response[:200].replace('\n', ' ')
+        raise ModelServiceError(message=f'Unexpected plain-text response from {source}: {preview}')
+    return response
+
+
 @register_llm('oai')
 class TextChatAtOAI(BaseFnCallModel):
 
@@ -44,7 +70,7 @@ class TextChatAtOAI(BaseFnCallModel):
         api_base = cfg.get('api_base')
         api_base = api_base or cfg.get('base_url')
         api_base = api_base or cfg.get('model_server')
-        api_base = (api_base or '').strip()
+        api_base = _normalize_oai_base_url(api_base or '')
 
         api_key = cfg.get('api_key')
         api_key = api_key or os.getenv('OPENAI_API_KEY')
@@ -76,7 +102,8 @@ class TextChatAtOAI(BaseFnCallModel):
                     kwargs['timeout'] = kwargs.pop('request_timeout')
 
                 client = openai.OpenAI(**api_kwargs)
-                return client.chat.completions.create(*args, **kwargs)
+                response = client.chat.completions.create(*args, **kwargs)
+                return _ensure_structured_response(response, api_kwargs.get('base_url', 'OpenAI-compatible endpoint'))
 
             def _complete_create(*args, **kwargs):
                 # OpenAI API v1 does not allow the following args, must pass by extra_body
@@ -90,7 +117,8 @@ class TextChatAtOAI(BaseFnCallModel):
                     kwargs['timeout'] = kwargs.pop('request_timeout')
 
                 client = openai.OpenAI(**api_kwargs)
-                return client.completions.create(*args, **kwargs)
+                response = client.completions.create(*args, **kwargs)
+                return _ensure_structured_response(response, api_kwargs.get('base_url', 'OpenAI-compatible endpoint'))
 
             self._complete_create = _complete_create
             self._chat_complete_create = _chat_complete_create

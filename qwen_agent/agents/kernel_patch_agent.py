@@ -16,6 +16,7 @@ from qwen_agent.llm.schema import Message
 from qwen_agent.kernel_patch.case_classifier import classify_case
 from qwen_agent.kernel_patch.edit_units import build_prefetched_context, parse_edit_units, summarize_edit_units
 from qwen_agent.kernel_patch.git_ops import KernelRepoManager
+from qwen_agent.kernel_patch.patch_alignment import build_grounded_context, refine_edit_units
 from qwen_agent.kernel_patch.models import KernelCaseBundle, PatchCandidate, extract_patch_from_response, strip_patch_from_response
 from qwen_agent.kernel_patch.prompts import build_analysis_prompt, build_patch_prompt, render_system_prompt
 from qwen_agent.kernel_patch.prompt_tuner import PromptProfile
@@ -93,9 +94,12 @@ class KernelPatchAgent:
         """
         bot = self._build_bot(bundle, worktree_path)
         edit_units = parse_edit_units(bundle, self.repo_manager, worktree_path)
+        edit_units = refine_edit_units(bundle, self.repo_manager, worktree_path, edit_units)
         classification = classify_case(bundle, edit_units)
         edit_unit_summary = summarize_edit_units(edit_units)
-        current_context_excerpt = build_prefetched_context(bundle, self.repo_manager, worktree_path, edit_units)
+        prefetched_context = build_prefetched_context(bundle, self.repo_manager, worktree_path, edit_units)
+        grounded_context = build_grounded_context(self.repo_manager, worktree_path, edit_units)
+        current_context_excerpt = (grounded_context + '\n\n' + prefetched_context).strip()
         analysis_text = self._run_single_prompt(
             bot,
             build_analysis_prompt(bundle, current_context_excerpt, classification.summary, edit_unit_summary),
