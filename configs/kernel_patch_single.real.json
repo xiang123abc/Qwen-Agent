@@ -1,0 +1,23 @@
+{
+  "cve_id": "CVE-2026-23255",
+  "origin_repo": "/root/linux_origin",
+  "target_repo": "/root/linux",
+  "community_commit_id": "f613e8b4afea0cd17c7168e8b00e25bc8d33175d",
+  "artifacts_root": "/root/qwen-agent/artifacts",
+  "code_query_via_mcp": true,
+  "agentic_retrieval": true,
+  "agentic_retrieval_max_tool_calls": 6,
+  "agentic_retrieval_timeout_sec": 90,
+  "debug_mode": true,
+  "max_iterations": 2,
+  "prepare_target_worktree": true,
+  "llm": {
+    "model": "qwen3-235b-a22b-thinking-2507",
+    "model_type": "oai",
+    "api_base": "https://value.apiqik.online/v1",
+    "api_key": "sk-F5ldvqxASFDTeZhyeCU2Uz3u7bCwpKkIJ1JURbeGF7ERwIIL",
+    "generate_cfg": {
+      "temperature": 0.1
+    }
+  }
+}

@@ -1,0 +1,3 @@
+
+  /root/qwen-agent/.venv/bin/python /root/qwen-agent/scripts/run_kernel_patch_dataset.py \
+    --config /root/qwen-agent/configs/kernel_patch_dataset.real.json

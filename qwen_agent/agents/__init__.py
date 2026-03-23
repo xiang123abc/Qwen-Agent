@@ -14,11 +14,29 @@
 
 from qwen_agent.agent import Agent, BasicAgent
 
-from .closed_loop_kernel_patch_agent import ClosedLoopKernelPatchAgent
-from .fncall_agent import FnCallAgent
-from .kernel_patch_agent import KernelPatchAgent
+ClosedLoopKernelPatchAgent = None
+FnCallAgent = None
+KernelPatchAgent = None
+
+try:
+    from .closed_loop_kernel_patch_agent import ClosedLoopKernelPatchAgent
+except ImportError:
+    pass
+
+try:
+    from .fncall_agent import FnCallAgent
+except ImportError:
+    pass
+
+try:
+    from .kernel_patch_agent import KernelPatchAgent
+except ImportError:
+    pass
 
 __all__ = [
     'Agent',
-    'BasicAgent'
+    'BasicAgent',
+    'FnCallAgent',
+    'KernelPatchAgent',
+    'ClosedLoopKernelPatchAgent',
 ]

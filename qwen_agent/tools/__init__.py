@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from .base import TOOL_REGISTRY, BaseTool
+from .mcp_manager import MCPManager
 
 from .storage import Storage
 
@@ -22,5 +23,5 @@ __all__ = [
 
     'TOOL_REGISTRY',
     'Storage',
-
+    'MCPManager',
 ]
