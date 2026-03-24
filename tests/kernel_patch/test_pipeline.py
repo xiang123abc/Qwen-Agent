@@ -3,7 +3,11 @@ import subprocess
 from pathlib import Path
 
 from qwen_agent.kernel_patch.config import KernelPatchConfig
-from qwen_agent.kernel_patch.mcp_backend import KernelRepoMCPClient, build_target_snippets_via_mcp
+from qwen_agent.kernel_patch.mcp_backend import (
+    KernelRepoMCPClient,
+    _validate_agentic_tool_usage,
+    build_target_snippets_via_mcp,
+)
 from qwen_agent.kernel_patch.models import PatchHunk, RootCauseReport
 from qwen_agent.kernel_patch.pipeline import KernelPatchPipeline
 from qwen_agent.kernel_patch.prompts import build_agentic_retriever_prompt
@@ -160,6 +164,19 @@ def planner_json():
     }, ensure_ascii=False)
 
 
+def solver_edit_json():
+    return json.dumps({
+        'summary': 'Insert a bounds check before memcpy.',
+        'edits': [{
+            'file_path': 'drivers/demo.c',
+            'start_line': 6,
+            'end_line': 7,
+            'new_content': '\n    if (len > (int)sizeof(buf))\n        return -22;\n    memcpy(buf, src, len);\n',
+            'rationale': 'Guard the fixed-size buffer before memcpy.'
+        }]
+    }, ensure_ascii=False)
+
+
 def failing_patch():
     return '''diff --git a/drivers/demo.c b/drivers/demo.c
 --- a/drivers/demo.c
@@ -206,7 +223,8 @@ def test_kernel_patch_pipeline_generates_artifacts(tmp_path):
     assert trace['success'] is True
     assert trace['decoder_report']['vulnerability_type'] == 'stack overflow'
     debug_log = config.debug_log_path.read_text(encoding='utf-8')
-    assert 'kernel_repo-apply_check' in debug_log
+    assert 'solver_snippets_attached' in debug_log
+    assert '"event_type": "apply_check"' in debug_log
 
 
 def test_kernel_patch_pipeline_retries_after_apply_failure(tmp_path):
@@ -343,6 +361,8 @@ def test_solver_prompt_includes_retrieval_report(tmp_path):
     assert 'retrieval_report' in solver_prompt
     assert 'missing_entities' in solver_prompt
     assert 'hunk_coverages' in solver_prompt
+    assert 'solver_snippets' in solver_prompt
+    assert 'edits' in solver_prompt
 
 
 def test_analysis_markdown_includes_retrieval_summary(tmp_path):
@@ -373,6 +393,55 @@ def test_analysis_markdown_includes_retrieval_summary(tmp_path):
     assert '### Hunk Coverage' in analysis
 
 
+def test_solver_snippets_are_attached_to_fix_plan(tmp_path):
+    origin, target, parent_commit, fixed_commit, patch_text = build_test_repos(tmp_path)
+    fake_llm = SequentialFakeLLM([decoder_json(), planner_json(), patch_text])
+    pipeline = KernelPatchPipeline(
+        llm=fake_llm,
+        debug_confirm=lambda *_args: True,
+    )
+    config = KernelPatchConfig(
+        cve_id='CVE-TEST-0007',
+        origin_repo=str(origin),
+        target_repo=str(target),
+        community_commit_id=fixed_commit,
+        target_commit=parent_commit,
+        artifacts_root=str(tmp_path / 'artifacts'),
+        debug_mode=True,
+        max_iterations=1,
+        prepare_target_worktree=True,
+        code_query_via_mcp=True,
+    )
+    result = pipeline.run(config)
+    assert result.final_plan.solver_snippets
+    assert any(snippet.file_path == 'drivers/demo.c' for snippet in result.final_plan.solver_snippets)
+
+
+def test_solver_edit_plan_materializes_patch(tmp_path):
+    origin, target, parent_commit, fixed_commit, patch_text = build_test_repos(tmp_path)
+    fake_llm = SequentialFakeLLM([decoder_json(), planner_json(), solver_edit_json()])
+    pipeline = KernelPatchPipeline(
+        llm=fake_llm,
+        debug_confirm=lambda *_args: True,
+    )
+    config = KernelPatchConfig(
+        cve_id='CVE-TEST-0008',
+        origin_repo=str(origin),
+        target_repo=str(target),
+        community_commit_id=fixed_commit,
+        target_commit=parent_commit,
+        artifacts_root=str(tmp_path / 'artifacts'),
+        debug_mode=True,
+        max_iterations=1,
+        prepare_target_worktree=True,
+        code_query_via_mcp=True,
+    )
+    result = pipeline.run(config)
+    assert result.success is True
+    patch_text = Path(result.patch_path).read_text(encoding='utf-8')
+    assert 'if (len > (int)sizeof(buf))' in patch_text
+
+
 def test_agentic_retriever_prompt_prioritizes_changed_files_and_impacted_functions():
     prompt = build_agentic_retriever_prompt(
         decoder_report=RootCauseReport(
@@ -389,3 +458,23 @@ def test_agentic_retriever_prompt_prioritizes_changed_files_and_impacted_functio
     assert '前 2 次工具调用必须优先围绕 changed_files 和 impacted_functions' in prompt
     assert '第 1 优先动作' in prompt
     assert '只有在 changed_files 和 impacted_functions 已经查过之后' in prompt
+
+
+def test_agentic_retriever_rejects_regex_like_search_code():
+    responses = [
+        Message(
+            role=ASSISTANT,
+            content='',
+            function_call={'name': 'kernel_repo-search_code', 'arguments': json.dumps({
+                'repo': '/tmp/repo',
+                'pattern': 'static void \\*ptype_get_idx',
+                'path_glob': 'net/core/net-procfs.c',
+            })}
+        )
+    ]
+    try:
+        _validate_agentic_tool_usage(responses, ['net/core/net-procfs.c'], 'kernel_repo')
+    except RuntimeError as ex:
+        assert 'regex-like pattern' in str(ex)
+    else:
+        raise AssertionError('Expected regex-like search_code pattern to be rejected')

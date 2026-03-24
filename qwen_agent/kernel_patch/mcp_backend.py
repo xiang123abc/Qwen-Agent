@@ -10,6 +10,7 @@ import json5
 
 from qwen_agent.agents.fncall_agent import FnCallAgent
 from qwen_agent.llm.schema import ASSISTANT, Message
+from qwen_agent.tools.base import BaseTool
 from qwen_agent.tools import MCPManager
 
 from .git_tools import summarize_text
@@ -141,8 +142,86 @@ def get_kernel_repo_mcp_tools(server_name: str = 'kernel_repo',
     return [tool for tool in tools if tool.name in allowed_names]
 
 
+def get_bound_kernel_repo_tools(trace: TraceRecorder,
+                                repo: str,
+                                changed_files: Sequence[str],
+                                server_name: str = 'kernel_repo') -> List[BaseTool]:
+    client = KernelRepoMCPClient(trace=trace, server_name=server_name)
+    changed_files = set(changed_files)
+
+    class BoundSearchCodeTool(BaseTool):
+        name = 'search_code'
+        description = 'Search literal code text only within allowed changed_files. Do not use regex patterns.'
+        parameters = {
+            'type': 'object',
+            'properties': {
+                'pattern': {
+                    'type': 'string',
+                    'description': 'Literal code text to search for in the changed file.'
+                },
+                'path_glob': {
+                    'type': 'string',
+                    'description': 'Must be one of the allowed changed_files.'
+                },
+                'mode': {
+                    'type': 'string',
+                    'enum': ['rg', 'git_grep'],
+                    'description': 'Search backend.'
+                },
+            },
+            'required': ['pattern', 'path_glob']
+        }
+
+        def call(self, params, **kwargs):
+            args = self._verify_json_format_args(params)
+            path_glob = args['path_glob']
+            if path_glob not in changed_files:
+                raise RuntimeError(f'path_glob must be one of changed_files: {path_glob}')
+            pattern = args['pattern']
+            if any(token in pattern for token in ('\\*', '.*', '^', '$')):
+                raise RuntimeError(f'search_code only accepts literal text patterns: {pattern}')
+            hits = client.search_code(repo=repo, pattern=pattern, path_glob=path_glob, mode=args.get('mode', 'rg'))
+            return json.dumps({'hits': [hit.model_dump() for hit in hits]}, ensure_ascii=False)
+
+    class BoundReadRangeTool(BaseTool):
+        name = 'read_range'
+        description = 'Read a specific line range only within allowed changed_files.'
+        parameters = {
+            'type': 'object',
+            'properties': {
+                'path': {
+                    'type': 'string',
+                    'description': 'Must be one of the allowed changed_files.'
+                },
+                'start_line': {
+                    'type': 'integer',
+                    'description': 'Start line, 1-based.'
+                },
+                'end_line': {
+                    'type': 'integer',
+                    'description': 'End line, 1-based.'
+                },
+            },
+            'required': ['path', 'start_line', 'end_line']
+        }
+
+        def call(self, params, **kwargs):
+            args = self._verify_json_format_args(params)
+            path = args['path']
+            if path not in changed_files:
+                raise RuntimeError(f'path must be one of changed_files: {path}')
+            snippet = client.read_range(repo=repo,
+                                        path=path,
+                                        start_line=int(args['start_line']),
+                                        end_line=int(args['end_line']),
+                                        reason=f'agentic:{path}')
+            return json.dumps(snippet.model_dump(), ensure_ascii=False)
+
+    return [BoundSearchCodeTool(), BoundReadRangeTool()]
+
+
 def _validate_agentic_tool_usage(responses: Sequence[Message], changed_files: Sequence[str], server_name: str) -> None:
-    allowed_tools = {f'{server_name}-search_code', f'{server_name}-read_range'}
+    allowed_tools = {f'{server_name}-search_code', f'{server_name}-read_range', 'search_code', 'read_range'}
     changed_files = set(changed_files)
     for message in responses:
         if message.role != ASSISTANT or not message.function_call:
@@ -155,10 +234,17 @@ def _validate_agentic_tool_usage(responses: Sequence[Message], changed_files: Se
             path_glob = arguments.get('path_glob')
             if path_glob not in changed_files:
                 raise RuntimeError(f'Agentic retriever search_code used path_glob outside changed_files: {path_glob}')
+            pattern = arguments.get('pattern', '')
+            if any(token in pattern for token in ('\\*', '.*', '^', '$')):
+                raise RuntimeError(f'Agentic retriever search_code used regex-like pattern: {pattern}')
+            if 'repo' in arguments:
+                raise RuntimeError('Agentic retriever must not supply repo for search_code')
         elif tool_name.endswith('read_range'):
             path = arguments.get('path')
             if path not in changed_files:
                 raise RuntimeError(f'Agentic retriever read_range used path outside changed_files: {path}')
+            if 'repo' in arguments:
+                raise RuntimeError('Agentic retriever must not supply repo for read_range')
 
 
 def _count_agentic_tool_calls(responses: Sequence[Message]) -> int:
@@ -201,7 +287,7 @@ def run_agentic_retrieval(llm,
     bot = FnCallAgent(
         llm=llm,
         system_message=system_message,
-        function_list=get_kernel_repo_mcp_tools(server_name, allowed_suffixes=['search_code', 'read_range']),
+        function_list=get_bound_kernel_repo_tools(trace, repo=repo, changed_files=changed_files, server_name=server_name),
         name='kernel_retriever',
     )
 
@@ -238,6 +324,102 @@ def run_agentic_retrieval(llm,
     )
     payload = json5.loads(final_text)
     return RetrievalReport.model_validate(payload)
+
+
+def _run_agentic_stage(llm,
+                       trace: TraceRecorder,
+                       repo: str,
+                       prompt: str,
+                       changed_files: Sequence[str],
+                       system_message: str,
+                       server_name: str = 'kernel_repo',
+                       max_tool_calls: int = 6,
+                       timeout_sec: int = 300) -> str:
+    bot = FnCallAgent(
+        llm=llm,
+        system_message=system_message,
+        function_list=get_bound_kernel_repo_tools(trace, repo=repo, changed_files=changed_files, server_name=server_name),
+        name='kernel_stage_agent',
+    )
+
+    class StageTimeout(Exception):
+        pass
+
+    def _timeout_handler(signum, frame):
+        raise StageTimeout(f'agentic stage exceeded {timeout_sec}s')
+
+    old_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _timeout_handler)
+    try:
+        signal.alarm(timeout_sec)
+        responses = bot.run_nonstream(messages=[Message(role='user', content=prompt)])
+        signal.alarm(0)
+    finally:
+        signal.signal(signal.SIGALRM, old_handler)
+
+    _validate_agentic_tool_usage(responses, changed_files=changed_files, server_name=server_name)
+    tool_calls = _count_agentic_tool_calls(responses)
+    if tool_calls > max_tool_calls:
+        raise RuntimeError(f'Agentic stage exceeded tool-call budget: {tool_calls} > {max_tool_calls}')
+
+    final_text = ''
+    for message in responses:
+        if message.role == ASSISTANT and isinstance(message.content, str) and message.content.strip():
+            final_text = message.content.strip()
+    if not final_text:
+        raise RuntimeError('Agentic stage did not return final output')
+    final_text = _extract_json_text(final_text)
+    trace.record_event(
+        phase='agentic_stage',
+        event_type='final_output',
+        payload={'summary': summarize_text(final_text, limit=1200)},
+    )
+    return final_text
+
+
+def run_agentic_json_stage(llm,
+                           trace: TraceRecorder,
+                           repo: str,
+                           prompt: str,
+                           changed_files: Sequence[str],
+                           system_message: str,
+                           server_name: str = 'kernel_repo',
+                           max_tool_calls: int = 6,
+                           timeout_sec: int = 300) -> Dict[str, Any]:
+    final_text = _run_agentic_stage(
+        llm=llm,
+        trace=trace,
+        repo=repo,
+        prompt=prompt,
+        changed_files=changed_files,
+        system_message=system_message,
+        server_name=server_name,
+        max_tool_calls=max_tool_calls,
+        timeout_sec=timeout_sec,
+    )
+    return json5.loads(final_text)
+
+
+def run_agentic_text_stage(llm,
+                           trace: TraceRecorder,
+                           repo: str,
+                           prompt: str,
+                           changed_files: Sequence[str],
+                           system_message: str,
+                           server_name: str = 'kernel_repo',
+                           max_tool_calls: int = 6,
+                           timeout_sec: int = 300) -> str:
+    return _run_agentic_stage(
+        llm=llm,
+        trace=trace,
+        repo=repo,
+        prompt=prompt,
+        changed_files=changed_files,
+        system_message=system_message,
+        server_name=server_name,
+        max_tool_calls=max_tool_calls,
+        timeout_sec=timeout_sec,
+    )
 
 
 def _extract_added_entities(origin_patch_text: str) -> Dict[str, List[str]]:

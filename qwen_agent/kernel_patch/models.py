@@ -29,6 +29,19 @@ class CodeSnippet(BaseModel):
     reason: str
 
 
+class CodeEdit(BaseModel):
+    file_path: str
+    start_line: int
+    end_line: int
+    new_content: str
+    rationale: str = ''
+
+
+class CodeEditPlan(BaseModel):
+    edits: List[CodeEdit] = Field(default_factory=list)
+    summary: str = ''
+
+
 class RetrievalEvidence(BaseModel):
     strategy: str
     reason: str
@@ -136,6 +149,7 @@ class FixPlan(BaseModel):
     summary: str
     candidate_files: List[str] = Field(default_factory=list)
     planned_hunks: List[PlannedChange] = Field(default_factory=list)
+    solver_snippets: List[CodeSnippet] = Field(default_factory=list)
     adaptation_notes: List[str] = Field(default_factory=list)
     unresolved_risks: List[str] = Field(default_factory=list)
 
@@ -167,6 +181,17 @@ class FixPlan(BaseModel):
     @field_validator('planned_hunks', mode='before')
     @classmethod
     def coerce_planned_hunks(cls, value):
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            return [value]
+        return value
+
+    @field_validator('solver_snippets', mode='before')
+    @classmethod
+    def coerce_solver_snippets(cls, value):
         if value is None:
             return []
         if isinstance(value, list):

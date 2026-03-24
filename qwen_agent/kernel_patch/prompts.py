@@ -93,6 +93,50 @@ def build_planner_prompt(decoder_report: RootCauseReport,
 '''
 
 
+def build_planner_agentic_prompt(decoder_report: RootCauseReport,
+                                 origin_hunks: List[PatchHunk],
+                                 changed_files: List[str],
+                                 previous_apply_error: str = '',
+                                 max_tool_calls: int = 6) -> str:
+    payload = {
+        'decoder_report': decoder_report.model_dump(),
+        'origin_hunks': [h.model_dump() for h in origin_hunks],
+        'changed_files': changed_files,
+        'previous_apply_error': previous_apply_error,
+    }
+    return f'''你是 Linux 内核补丁适配 Planner。你必须自己调用 MCP 工具定位目标代码，再输出一个 JSON 对象。
+
+工具使用规则：
+- 只允许使用 `kernel_repo-search_code` 和 `kernel_repo-read_range`
+- 只允许查询 changed_files 中的文件
+- 前 2 次工具调用必须优先围绕 impacted_functions
+- 最多 {max_tool_calls} 次工具调用，拿到足够证据后立刻停止
+
+任务：
+1. 在 changed_files 内定位与 origin_hunks 语义最接近的代码块。
+2. 给出跨版本适配计划；如果本地没有完全对应实现，要说明替代方案。
+3. 最终只输出 JSON，不要输出 Markdown。
+
+输出 JSON 字段必须包含：
+- summary
+- candidate_files
+- planned_hunks
+- adaptation_notes
+- unresolved_risks
+
+其中 planned_hunks 每项必须包含：
+- file_path
+- change_type
+- rationale
+- anchor
+- target_snippet
+- adaptation_strategy
+
+输入：
+{_json_block(payload)}
+'''
+
+
 def build_solver_prompt(decoder_report: RootCauseReport,
                         fix_plan: FixPlan,
                         origin_patch: str,
@@ -109,16 +153,58 @@ def build_solver_prompt(decoder_report: RootCauseReport,
     return f'''你是 Linux 内核补丁 Solver。
 
 要求：
-1. 只输出最终 unified diff patch 文本，不要输出解释，不要使用 Markdown 代码块。
-2. patch 必须针对 target_snippets 所代表的本地仓代码。
-3. 若上一次 git apply --check 失败，必须修正路径、上下文或 hunk。
-4. patch 应尽量保持社区修复语义，但允许按 fix_plan.adaptation_notes 做跨版本适配。
-5. 必须参考 retrieval_report，优先在已覆盖的 hunk 和 entity 证据上生成 patch。
-6. 对 retrieval_report.missing_entities 中的新增 helper/宏/结构体，不要直接照抄上游定义，除非 target_snippets 中已有充分证据；优先生成旧版本等价实现。
-7. 如果 retrieval_report 显示某个 hunk 未覆盖，输出的 patch 必须更加保守，优先修改已覆盖代码块。
+1. 优先输出一个 JSON 对象，不要输出解释，不要输出 Markdown。JSON 字段必须包含：
+   - summary
+   - edits
+2. edits 每项必须包含：
+   - file_path
+   - start_line
+   - end_line
+   - new_content
+   - rationale
+3. 这些 edits 将被直接应用到本地代码，然后系统用 git diff 生成最终 patch。
+4. edits 必须优先基于 fix_plan.solver_snippets 所代表的精确本地代码片段生成。
+5. 若上一次 git apply --check 失败，必须修正相关 edit 的范围或内容。
+6. patch 语义应尽量保持社区修复逻辑，但允许按 fix_plan.adaptation_notes 做跨版本适配。
+7. 对 retrieval_report.missing_entities 中的新增 helper/宏/结构体，不要直接照抄上游定义，除非 solver_snippets 已有充分证据；优先生成旧版本等价实现。
+8. 如果 fix_plan.solver_snippets 为空，不要臆造超大 edit，应尽量生成最小修改。
+9. 只有在极少数无法表达为 edits 的情况下，才退回输出 unified diff patch 文本。
 
 规划输入：
 {_json_block(solver_payload)}
+
+参考 origin patch：
+{origin_patch}
+'''
+
+
+def build_solver_agentic_prompt(decoder_report: RootCauseReport,
+                                fix_plan: FixPlan,
+                                origin_patch: str,
+                                changed_files: List[str],
+                                previous_apply_error: str = '',
+                                max_tool_calls: int = 6) -> str:
+    payload = {
+        'decoder_report': decoder_report.model_dump(),
+        'fix_plan': fix_plan.model_dump(),
+        'changed_files': changed_files,
+        'previous_apply_error': previous_apply_error,
+    }
+    return f'''你是 Linux 内核补丁 Solver。你必须自己调用 MCP 工具读取 changed_files 中的本地代码，然后输出最终 patch 文本。
+
+工具使用规则：
+- 只允许使用 `kernel_repo-search_code` 和 `kernel_repo-read_range`
+- 只允许查询 changed_files 中的文件
+- 最多 {max_tool_calls} 次工具调用，拿到足够上下文后立刻输出 patch
+
+要求：
+1. 只输出 unified diff patch 文本，不要输出解释，不要使用 Markdown 代码块。
+2. patch 必须针对本地仓实际存在的代码。
+3. 若上一次 git apply --check 失败，必须修正上下文。
+4. patch 应保持社区修复语义，但允许按 fix_plan 做跨版本适配。
+
+输入：
+{_json_block(payload)}
 
 参考 origin patch：
 {origin_patch}
@@ -141,7 +227,7 @@ def build_agentic_retriever_prompt(decoder_report: RootCauseReport,
     return f'''你是 Linux 内核补丁检索 Retriever。你必须通过 MCP 工具自己搜索和读取目标仓代码，不允许假设。
 
 目标：
-1. 使用 `kernel_repo-search_code`、`kernel_repo-read_range` 自主检索。
+1. 使用 `search_code`、`read_range` 自主检索。
 2. 为每个 origin hunk 找到本地证据，输出 hunk_coverages。
 3. 对社区 patch 新增的 helper、宏、结构体、include 做存在性检查，输出 entity_coverages 和 missing_entities。
 4. 最终只输出一个 JSON 对象，不要输出 Markdown，不要输出解释。
@@ -160,11 +246,12 @@ def build_agentic_retriever_prompt(decoder_report: RootCauseReport,
 - 只检索 changed_files 对应文件。
 - 你必须只在 changed_files 范围内检索，不允许搜索或读取 changed_files 之外的文件。
 - 前 2 次工具调用必须优先围绕 changed_files 和 impacted_functions，不允许一开始先查新增 struct/macro/helper。
-- 第 1 优先动作：如果 impacted_functions 非空，先在 changed_files 内对 impacted_functions 做 `kernel_repo-search_code()` 或直接 `kernel_repo-read_range()` 读取函数附近代码。
+- 第 1 优先动作：如果 impacted_functions 非空，先在 changed_files 内对 impacted_functions 做 `search_code()` 或直接 `read_range()` 读取函数附近代码。
 - 第 2 优先动作：继续在 changed_files 内读取同一函数或同一文件的关键上下文，确认真实修改点。
 - 只有在 changed_files 和 impacted_functions 已经查过之后，才允许在 changed_files 内继续检查新增 struct/macro/helper；仍然不允许跨文件扩展搜索。
 - 若同名实体在本地不存在，明确记入 missing_entities。
 - 只有在 read_range 读到具体上下文后，才能把该证据写进 snippets 或 coverages。
+- `kernel_repo-search_code()` 只能传源码中的字面文本片段，不允许传正则表达式，不允许使用 `\\*`、`.*`、`^`、`$` 这类模式字符来猜测函数声明。
 - 避免无效调用：不要重复查询同一 symbol/kind/path，除非上一次结果不足以定位 hunk。
 - 避免过早扩散：如果 changed_files 中已经找到高质量证据，不要继续扩大搜索范围。
 - 工具调用预算上限：最多 {max_tool_calls} 次。到达预算前必须尽快整理已有证据并输出 JSON。

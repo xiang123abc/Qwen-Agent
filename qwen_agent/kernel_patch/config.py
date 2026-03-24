@@ -74,6 +74,10 @@ class KernelPatchConfig(BaseModel):
     def worktree_path(self) -> Path:
         return self.artifact_dir / 'target_worktree'
 
+    @property
+    def verify_worktree_path(self) -> Path:
+        return self.artifact_dir / 'verify_worktree'
+
     def ensure_artifact_dir(self) -> Path:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
         return self.artifact_dir

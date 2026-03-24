@@ -6,11 +6,11 @@
   "code_query_via_mcp": true,
   "agentic_retrieval": true,
   "agentic_retrieval_max_tool_calls": 6,
-  "agentic_retrieval_timeout_sec": 90,
+  "agentic_retrieval_timeout_sec": 300,
   "debug_mode": true,
   "max_iterations": 2,
   "llm": {
-    "model": "qwen3-235b-a22b-thinking-2507",
+    "model": "qwen3-235b-a22b",
     "model_type": "oai",
     "api_base": "https://value.apiqik.online/v1",
     "api_key": "sk-F5ldvqxASFDTeZhyeCU2Uz3u7bCwpKkIJ1JURbeGF7ERwIIL",

@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from qwen_agent.kernel_patch.models import CodeSearchHit, CodeSnippet, PatchHunk, ToolTraceEntry
+from qwen_agent.kernel_patch.models import CodeEdit, CodeSearchHit, CodeSnippet, PatchHunk, ToolTraceEntry
 from qwen_agent.kernel_patch.trace import TraceRecorder
 
 HUNK_RE = re.compile(r'^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? \+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@')
@@ -150,6 +150,39 @@ class GitRepository:
     def apply_check(self, patch_path: str) -> Tuple[bool, str]:
         proc = self.run(['git', 'apply', '--check', patch_path], check=False)
         return proc.returncode == 0, proc.stderr.strip()
+
+    def diff_check(self) -> Tuple[bool, str]:
+        proc = self.run(['git', 'diff', '--check'], check=False)
+        return proc.returncode == 0, proc.stderr.strip() or proc.stdout.strip()
+
+    def diff(self, paths: Optional[List[str]] = None) -> str:
+        args = ['git', 'diff', '--']
+        if paths:
+            args.extend(paths)
+        return self.run(args).stdout
+
+    def reset_hard(self, commit: str) -> None:
+        self.run(['git', 'reset', '--hard', commit])
+
+    def apply_code_edits(self, edits: List[CodeEdit]) -> None:
+        grouped: Dict[str, List[CodeEdit]] = {}
+        for edit in edits:
+            grouped.setdefault(edit.file_path, []).append(edit)
+        for file_path, file_edits in grouped.items():
+            abs_path = self.path / file_path
+            if not abs_path.exists():
+                raise FileNotFoundError(f'{abs_path} does not exist')
+            original_lines = abs_path.read_text(encoding='utf-8').splitlines(keepends=True)
+            file_edits = sorted(file_edits, key=lambda item: item.start_line, reverse=True)
+            for edit in file_edits:
+                start = max(1, edit.start_line)
+                end = max(start, edit.end_line)
+                replacement = edit.new_content
+                replacement_lines = [] if replacement == '' else replacement.splitlines(keepends=True)
+                if replacement and not replacement.endswith('\n'):
+                    replacement_lines[-1] = replacement_lines[-1] + '\n'
+                original_lines[start - 1:end] = replacement_lines
+            abs_path.write_text(''.join(original_lines), encoding='utf-8')
 
 
 def prepare_worktree(base_repo: GitRepository, target_commit: str, worktree_path: Path) -> Path:

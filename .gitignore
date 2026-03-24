@@ -16,7 +16,7 @@ benchmark/output_data/*
 benchmark/upload_file/*
 benchmark/upload_file_clean/*
 benchmark/eval_data/
-Qwen-Agent
+
 
 docqa/*
 log/*
@@ -65,3 +65,6 @@ qwen-agent-docs/website/last-sync.json
 qwen-agent-docs/website/_pagefind/
 qwen-agent-docs/website/*.tsbuildinfo
 qwen-agent/workspace/kernel_patch_live/worktrees
+
+artifacts
+artifacts*

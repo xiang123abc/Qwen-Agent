@@ -13,9 +13,11 @@ from qwen_agent.log import logger
 
 from .config import KernelPatchConfig
 from .git_tools import GitRepository, build_target_snippets, parse_patch_hunks, prepare_worktree, summarize_text
-from .mcp_backend import KernelRepoMCPClient, build_target_snippets_via_mcp, run_agentic_retrieval
-from .models import FixPlan, KernelPatchRunResult, RetrievalReport, RootCauseReport, SolverAttempt
-from .prompts import build_decoder_prompt, build_planner_prompt, build_solver_prompt
+from .mcp_backend import (KernelRepoMCPClient, build_target_snippets_via_mcp, run_agentic_json_stage,
+                          run_agentic_text_stage)
+from .models import CodeEditPlan, FixPlan, KernelPatchRunResult, RetrievalReport, RootCauseReport, SolverAttempt
+from .prompts import (build_decoder_prompt, build_planner_agentic_prompt, build_planner_prompt,
+                      build_solver_agentic_prompt, build_solver_prompt)
 from .trace import TraceRecorder
 
 T = TypeVar('T')
@@ -42,6 +44,8 @@ class KernelPatchPipeline:
         if config.prepare_target_worktree:
             target_repo_path = prepare_worktree(target_base_repo, target_commit, config.worktree_path)
         target_repo = GitRepository(str(target_repo_path), trace=trace, label='target_worktree')
+        verify_repo_path = prepare_worktree(target_base_repo, target_commit, config.verify_worktree_path)
+        verify_repo = GitRepository(str(verify_repo_path), trace=trace, label='verify_worktree')
 
         if mcp_client is not None:
             origin_patch_payload = mcp_client.show_commit_patch(config.origin_repo, config.community_commit_id)
@@ -67,25 +71,13 @@ class KernelPatchPipeline:
         previous_apply_error = ''
         final_plan: Optional[FixPlan] = None
         retrieval_reports: List[RetrievalReport] = []
+        can_use_main_llm_agentic = config.code_query_via_mcp and (
+            isinstance(self.llm, dict) or hasattr(self.llm, 'model'))
 
         for iteration in range(1, config.max_iterations + 1):
             retrieval_report: Optional[RetrievalReport] = None
-            if mcp_client is not None:
-                can_use_agentic_retrieval = config.agentic_retrieval and (
-                    isinstance(self.llm, dict) or hasattr(self.llm, 'model'))
-                if can_use_agentic_retrieval:
-                    retrieval_report = run_agentic_retrieval(
-                        llm=self.llm,
-                        trace=trace,
-                        repo=str(target_repo_path),
-                        decoder_report=decoder_report,
-                        origin_hunks=origin_hunks,
-                        changed_files=changed_files,
-                        origin_patch=origin_patch,
-                        max_tool_calls=config.agentic_retrieval_max_tool_calls,
-                        timeout_sec=config.agentic_retrieval_timeout_sec,
-                    )
-                else:
+            if not can_use_main_llm_agentic:
+                if mcp_client is not None:
                     retrieval_report = build_target_snippets_via_mcp(
                         mcp_client=mcp_client,
                         repo=str(target_repo_path),
@@ -96,37 +88,58 @@ class KernelPatchPipeline:
                         decoder_report.impacted_structs + decoder_report.impacted_globals,
                         origin_patch_text=origin_patch,
                     )
-                retrieval_reports.append(retrieval_report)
-                target_snippets = retrieval_report.snippets
-                trace.record_event(
-                    phase='retriever',
-                    event_type='coverage_report',
-                    payload={
-                        'iteration': iteration,
-                        'snippet_count': len(retrieval_report.snippets),
-                        'covered_hunks': sum(1 for item in retrieval_report.hunk_coverages if item.covered),
-                        'total_hunks': len(retrieval_report.hunk_coverages),
-                        'missing_entities': retrieval_report.missing_entities,
-                    },
+                    retrieval_reports.append(retrieval_report)
+                    target_snippets = retrieval_report.snippets
+                else:
+                    target_snippets = build_target_snippets(
+                        target_repo=target_repo,
+                        origin_hunks=origin_hunks,
+                        semantic_anchors=decoder_report.semantic_anchors,
+                        path_hints=changed_files,
+                    )
+                planner_prompt = build_planner_prompt(
+                    decoder_report=decoder_report,
+                    origin_hunks=origin_hunks,
+                    target_snippets=target_snippets,
+                    retrieval_report=retrieval_report,
+                    previous_apply_error=previous_apply_error,
+                )
+                final_plan = self._generate_structured(
+                    step=f'planner.iteration_{iteration}',
+                    prompt=planner_prompt,
+                    response_model=FixPlan,
+                    trace=trace,
                 )
             else:
-                target_snippets = build_target_snippets(
-                    target_repo=target_repo,
+                planner_prompt = build_planner_agentic_prompt(
+                    decoder_report=decoder_report,
                     origin_hunks=origin_hunks,
-                    semantic_anchors=decoder_report.semantic_anchors,
-                    path_hints=changed_files,
+                    changed_files=changed_files,
+                    previous_apply_error=previous_apply_error,
+                    max_tool_calls=config.agentic_retrieval_max_tool_calls,
                 )
-            planner_prompt = build_planner_prompt(
-                decoder_report=decoder_report,
-                origin_hunks=origin_hunks,
-                target_snippets=target_snippets,
-                retrieval_report=retrieval_report,
-                previous_apply_error=previous_apply_error,
-            )
-            final_plan = self._generate_structured(
-                step=f'planner.iteration_{iteration}',
-                prompt=planner_prompt,
-                response_model=FixPlan,
+                planner_payload = run_agentic_json_stage(
+                    llm=self.llm,
+                    trace=trace,
+                    repo=str(target_repo_path),
+                    prompt=planner_prompt,
+                    changed_files=changed_files,
+                    system_message=(
+                        '你是 Linux 内核补丁规划 Agent。必须通过 MCP 工具在 changed_files 内查代码，不允许臆测。'
+                        '只允许使用 search_code 和 read_range，并在预算内输出 JSON。'
+                    ),
+                    max_tool_calls=config.agentic_retrieval_max_tool_calls,
+                    timeout_sec=config.agentic_retrieval_timeout_sec,
+                )
+                final_plan = FixPlan.model_validate(planner_payload)
+                target_snippets = []
+
+            final_plan = self._attach_solver_snippets(
+                fix_plan=final_plan,
+                changed_files=changed_files,
+                target_repo=target_repo,
+                target_repo_path=str(target_repo_path),
+                mcp_client=mcp_client,
                 trace=trace,
             )
 
@@ -140,24 +153,34 @@ class KernelPatchPipeline:
                 retrieval_report=retrieval_report,
                 previous_apply_error=previous_apply_error,
             )
-            patch_text = self._generate_text(
+            solver_output = self._generate_text(
                 step=f'solver.iteration_{iteration}',
                 prompt=solver_prompt,
                 trace=trace,
             )
-            patch_text = self._normalize_patch_text(patch_text)
+            target_repo.reset_hard(target_commit)
+            verify_repo.reset_hard(target_commit)
+            patch_text, apply_ok, apply_stderr = self._materialize_patch_from_solver_output(
+                solver_output=solver_output,
+                target_repo=target_repo,
+                verify_repo=verify_repo,
+                patch_path=str(config.patch_path),
+                target_commit=target_commit,
+                changed_files=changed_files,
+            )
             config.patch_path.write_text(patch_text, encoding='utf-8')
-            if mcp_client is not None:
-                apply_ok, apply_stderr = mcp_client.apply_check(str(target_repo_path), str(config.patch_path))
+            if mcp_client is not None and not apply_ok:
+                # keep stderr from verify_repo apply --check
+                pass
             else:
-                apply_ok, apply_stderr = target_repo.apply_check(str(config.patch_path))
+                pass
             attempts.append(
                 SolverAttempt(
                     iteration=iteration,
                     apply_check_passed=apply_ok,
                     patch_path=str(config.patch_path),
                     apply_check_stderr=apply_stderr,
-                    solver_raw_output=patch_text,
+                    solver_raw_output=solver_output,
                 ))
             trace.record_event(
                 phase='solver',
@@ -205,6 +228,122 @@ class KernelPatchPipeline:
             attempts=attempts,
             summary=summary,
         )
+
+    def _materialize_patch_from_solver_output(self,
+                                              solver_output: str,
+                                              target_repo: GitRepository,
+                                              verify_repo: GitRepository,
+                                              patch_path: str,
+                                              target_commit: str,
+                                              changed_files: List[str]) -> tuple[str, bool, str]:
+        try:
+            payload = self._extract_json(solver_output)
+            if isinstance(payload, dict) and 'edits' in payload:
+                edit_plan = CodeEditPlan.model_validate(payload)
+                target_repo.apply_code_edits(edit_plan.edits)
+                diff_ok, diff_stderr = target_repo.diff_check()
+                patch_text = target_repo.diff(changed_files)
+                Path(patch_path).write_text(patch_text, encoding='utf-8')
+                if not diff_ok:
+                    return patch_text, False, diff_stderr
+                apply_ok, apply_stderr = verify_repo.apply_check(patch_path)
+                return patch_text, apply_ok, apply_stderr
+        except Exception:
+            pass
+
+        patch_text = self._normalize_patch_text(solver_output)
+        Path(patch_path).write_text(patch_text, encoding='utf-8')
+        apply_ok, apply_stderr = verify_repo.apply_check(patch_path)
+        return patch_text, apply_ok, apply_stderr
+
+    def _attach_solver_snippets(self,
+                                fix_plan: FixPlan,
+                                changed_files: List[str],
+                                target_repo: GitRepository,
+                                target_repo_path: str,
+                                mcp_client: Optional[KernelRepoMCPClient],
+                                trace: TraceRecorder) -> FixPlan:
+        if fix_plan.solver_snippets:
+            return fix_plan
+
+        snippets = []
+        seen = set()
+
+        def add_snippet(snippet):
+            key = (snippet.file_path, snippet.start_line, snippet.end_line)
+            if key in seen:
+                return
+            seen.add(key)
+            snippets.append(snippet)
+
+        for planned_hunk in fix_plan.planned_hunks:
+            file_path = planned_hunk.file_path
+            if file_path not in changed_files:
+                continue
+            matched = False
+            if mcp_client is not None and planned_hunk.anchor.strip():
+                try:
+                    hits = mcp_client.search_code(target_repo_path, planned_hunk.anchor, path_glob=file_path)
+                except Exception:
+                    hits = []
+                if hits:
+                    hit = hits[0]
+                    add_snippet(
+                        mcp_client.read_range(
+                            target_repo_path,
+                            hit.file_path,
+                            max(1, hit.line_number - 12),
+                            hit.line_number + 28,
+                            reason=f'solver_anchor:{planned_hunk.anchor}',
+                        ))
+                    matched = True
+            if not matched and mcp_client is None and planned_hunk.anchor.strip():
+                hits = target_repo.search_fixed_string(planned_hunk.anchor, path_glob=file_path)
+                if hits:
+                    hit = hits[0]
+                    add_snippet(
+                        target_repo.read_range(
+                            hit.file_path,
+                            max(1, hit.line_number - 12),
+                            hit.line_number + 28,
+                            reason=f'solver_anchor:{planned_hunk.anchor}',
+                        ))
+                    matched = True
+            if not matched:
+                if mcp_client is not None:
+                    try:
+                        add_snippet(mcp_client.read_range(target_repo_path, file_path, 1, 160,
+                                                          reason=f'solver_file:{file_path}'))
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        add_snippet(target_repo.read_range(file_path, 1, 160, reason=f'solver_file:{file_path}'))
+                    except Exception:
+                        pass
+
+        if not snippets:
+            for file_path in changed_files:
+                try:
+                    if mcp_client is not None:
+                        add_snippet(mcp_client.read_range(target_repo_path, file_path, 1, 160,
+                                                          reason=f'solver_fallback:{file_path}'))
+                    else:
+                        add_snippet(target_repo.read_range(file_path, 1, 160, reason=f'solver_fallback:{file_path}'))
+                except Exception:
+                    continue
+                if len(snippets) >= 2:
+                    break
+
+        trace.record_event(
+            phase='solver',
+            event_type='solver_snippets_attached',
+            payload={
+                'count': len(snippets),
+                'files': [snippet.file_path for snippet in snippets],
+            },
+        )
+        return fix_plan.model_copy(update={'solver_snippets': snippets})
 
     def _resolve_target_commit(self,
                                config: KernelPatchConfig,
