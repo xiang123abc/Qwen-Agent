@@ -40,7 +40,7 @@ class KernelPatchConfig(BaseModel):
     code_query_via_mcp: bool = True
     agentic_retrieval: bool = True
     agentic_retrieval_max_tool_calls: int = 6
-    agentic_retrieval_timeout_sec: int = 90
+    agentic_retrieval_timeout_sec: int = 300
     llm: Optional[KernelPatchLLMConfig] = None
 
     @field_validator('max_iterations', 'agentic_retrieval_max_tool_calls', 'agentic_retrieval_timeout_sec')

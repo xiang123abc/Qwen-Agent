@@ -165,6 +165,14 @@ def _count_agentic_tool_calls(responses: Sequence[Message]) -> int:
     return sum(1 for message in responses if message.role == ASSISTANT and message.function_call)
 
 
+def _extract_json_text(text: str) -> str:
+    cleaned = (text or '').strip()
+    fence_match = re.search(r'```(?:json)?\s*(.*?)\s*```', cleaned, flags=re.S)
+    if fence_match:
+        return fence_match.group(1).strip()
+    return cleaned
+
+
 def run_agentic_retrieval(llm,
                           trace: TraceRecorder,
                           repo: str,
@@ -174,7 +182,7 @@ def run_agentic_retrieval(llm,
                           origin_patch: str,
                           server_name: str = 'kernel_repo',
                           max_tool_calls: int = 6,
-                          timeout_sec: int = 90) -> RetrievalReport:
+                          timeout_sec: int = 300) -> RetrievalReport:
     system_message = (
         '你是 Linux 内核代码检索 Agent。必须通过 MCP 工具检索，不允许臆测。'
         '你必须只在 changed_files 范围内检索。'
@@ -222,6 +230,7 @@ def run_agentic_retrieval(llm,
             final_text = message.content.strip()
     if not final_text:
         raise RuntimeError('Agentic retriever did not return final JSON output')
+    final_text = _extract_json_text(final_text)
     trace.record_event(
         phase='retriever',
         event_type='agentic_retriever_output',
