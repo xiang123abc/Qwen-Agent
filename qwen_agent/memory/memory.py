@@ -27,6 +27,9 @@ from qwen_agent.settings import (DEFAULT_MAX_REF_TOKEN, DEFAULT_PARSER_PAGE_SIZE
 from qwen_agent.tools import BaseTool
 from qwen_agent.utils.utils import extract_files_from_messages, extract_text_from_message, get_file_type
 
+# Supported file types for parsing in memory RAG
+PARSER_SUPPORTED_FILE_TYPES = {'pdf', 'docx', 'pptx', 'txt', 'html', 'csv', 'tsv', 'xlsx', 'xls'}
+
 
 class Memory(Agent):
     """Memory is special agent for file management.
@@ -62,7 +65,10 @@ class Memory(Agent):
             self.rag_keygen_strategy = 'none'
 
         function_list = function_list or []
-        super().__init__(function_list=[] + function_list,
+        # Add default rag searchers if not specified
+        if not function_list:
+            function_list = ['retrieval', 'keyword_search']
+        super().__init__(function_list=function_list,
                          llm=llm,
                          system_message=system_message)
 
@@ -95,18 +101,22 @@ class Memory(Agent):
 
             # Keyword generation
             if query and self.rag_keygen_strategy.lower() != 'none':
-                module_name = 'qwen_agent.agents.keygen_strategies'
-                module = import_module(module_name)
-                cls = getattr(module, self.rag_keygen_strategy)
-                keygen = cls(llm=self.llm)
-                response = keygen.run([Message(USER, query)], files=rag_files)
-                last = None
-                for last in response:
-                    continue
-                if last:
-                    keyword = last[-1].content.strip()
-                else:
-                    keyword = ''
+                try:
+                    module_name = 'qwen_agent.agents.keygen_strategies'
+                    module = import_module(module_name)
+                    cls = getattr(module, self.rag_keygen_strategy)
+                    keygen = cls(llm=self.llm)
+                    response = keygen.run([Message(USER, query)], files=rag_files)
+                    last = None
+                    for last in response:
+                        continue
+                    if last:
+                        keyword = last[-1].content.strip()
+                    else:
+                        keyword = ''
+                except (ImportError, AttributeError):
+                    # keygen_strategies module not available, skip keyword generation
+                    keyword = query
 
                 if keyword.startswith('```json'):
                     keyword = keyword[len('```json'):]

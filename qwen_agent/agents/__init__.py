@@ -17,6 +17,8 @@ from qwen_agent.agent import Agent, BasicAgent
 ClosedLoopKernelPatchAgent = None
 FnCallAgent = None
 KernelPatchAgent = None
+Assistant = None
+ArticleAgent = None
 
 try:
     from .closed_loop_kernel_patch_agent import ClosedLoopKernelPatchAgent
@@ -33,10 +35,22 @@ try:
 except ImportError:
     pass
 
+try:
+    from .assistant import Assistant
+except ImportError:
+    pass
+
+try:
+    from .article_agent import ArticleAgent
+except ImportError:
+    pass
+
 __all__ = [
     'Agent',
     'BasicAgent',
     'FnCallAgent',
     'KernelPatchAgent',
     'ClosedLoopKernelPatchAgent',
+    'Assistant',
+    'ArticleAgent',
 ]
