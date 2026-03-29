@@ -197,7 +197,7 @@ class Agent(ABC):
             logger.info(f'Tool call start: {tool_name}\nArgs:\n{preview}')
         try:
             tool_result = tool.call(tool_args, **kwargs)
-        except (ToolServiceError, DocParserError) as ex:
+        except ToolServiceError as ex:
             raise ex
         except Exception as ex:
             exception_type = type(ex).__name__

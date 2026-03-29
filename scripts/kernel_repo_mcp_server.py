@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -29,6 +30,14 @@ def run_in_repo(repo: str, args: List[str], check: bool = True) -> subprocess.Co
     if check and proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or f'command failed: {args}')
     return proc
+
+
+def resolve_repo_path(repo: str, path: str) -> Path:
+    repo_root = Path(repo).resolve()
+    target = (repo_root / path).resolve()
+    if target != repo_root and repo_root not in target.parents:
+        raise RuntimeError(f'Path escapes repo root: {path}')
+    return target
 
 
 def parse_patch_hunks(origin_patch: str, max_anchor_lines: int = 8) -> list[dict]:
@@ -108,7 +117,7 @@ def search_code(repo: str, pattern: str, path_glob: str | None = None,
 @server.tool(description='Read a specific line range from a file in the repository.')
 def read_range(repo: str, path: str, start_line: int, end_line: int) -> str:
     try:
-        file_path = (Path(repo) / path).resolve()
+        file_path = resolve_repo_path(repo, path)
         if start_line < 1:
             start_line = 1
         cmd = ['bash', '-lc', f"nl -ba '{file_path}' | sed -n '{start_line},{end_line}p'"]
@@ -123,6 +132,175 @@ def read_range(repo: str, path: str, start_line: int, end_line: int) -> str:
             },
             ensure_ascii=False,
         )
+    except Exception as ex:
+        return json.dumps({'ok': False, 'error': str(ex)}, ensure_ascii=False)
+
+
+@server.tool(description='Read a full file from the repository.')
+def read_file(repo: str, path: str) -> str:
+    try:
+        file_path = resolve_repo_path(repo, path)
+        return json.dumps(
+            {
+                'ok': True,
+                'path': path,
+                'content': file_path.read_text(encoding='utf-8'),
+            },
+            ensure_ascii=False,
+        )
+    except Exception as ex:
+        return json.dumps({'ok': False, 'error': str(ex)}, ensure_ascii=False)
+
+
+@server.tool(description='Write a full file in the repository.')
+def write_file(repo: str, path: str, content: str) -> str:
+    try:
+        file_path = resolve_repo_path(repo, path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content, encoding='utf-8')
+        return json.dumps(
+            {
+                'ok': True,
+                'path': path,
+                'bytes_written': len(content.encode('utf-8')),
+            },
+            ensure_ascii=False,
+        )
+    except Exception as ex:
+        return json.dumps({'ok': False, 'error': str(ex)}, ensure_ascii=False)
+
+
+@server.tool(description='Replace a literal text block inside a repository file.')
+def replace_in_file(repo: str, path: str, old_text: str, new_text: str, expected_count: int = 1) -> str:
+    try:
+        file_path = resolve_repo_path(repo, path)
+        content = file_path.read_text(encoding='utf-8')
+        occurrences = content.count(old_text)
+        if occurrences != expected_count:
+            raise RuntimeError(f'Expected {expected_count} occurrences, found {occurrences}')
+        updated = content.replace(old_text, new_text, expected_count)
+        file_path.write_text(updated, encoding='utf-8')
+        return json.dumps(
+            {
+                'ok': True,
+                'path': path,
+                'occurrences': occurrences,
+                'bytes_written': len(updated.encode('utf-8')),
+            },
+            ensure_ascii=False,
+        )
+    except Exception as ex:
+        return json.dumps({'ok': False, 'error': str(ex)}, ensure_ascii=False)
+
+
+@server.tool(description='Replace an inclusive line range inside a repository file.')
+def replace_lines(repo: str, path: str, start_line: int, end_line: int, new_text: str) -> str:
+    try:
+        file_path = resolve_repo_path(repo, path)
+        lines = file_path.read_text(encoding='utf-8').splitlines(keepends=True)
+        start = max(1, int(start_line))
+        end = max(start, int(end_line))
+        replacement = [] if new_text == '' else new_text.splitlines(keepends=True)
+        if new_text and not new_text.endswith('\n'):
+            replacement[-1] = replacement[-1] + '\n'
+        lines[start - 1:end] = replacement
+        file_path.write_text(''.join(lines), encoding='utf-8')
+        return json.dumps(
+            {
+                'ok': True,
+                'path': path,
+                'start_line': start,
+                'end_line': end,
+                'bytes_written': len(''.join(lines).encode('utf-8')),
+            },
+            ensure_ascii=False,
+        )
+    except Exception as ex:
+        return json.dumps({'ok': False, 'error': str(ex)}, ensure_ascii=False)
+
+
+@server.tool(description='Insert text before a literal anchor in a repository file.')
+def insert_before(repo: str, path: str, anchor_text: str, new_text: str, expected_count: int = 1) -> str:
+    try:
+        file_path = resolve_repo_path(repo, path)
+        content = file_path.read_text(encoding='utf-8')
+        occurrences = content.count(anchor_text)
+        if occurrences != expected_count:
+            raise RuntimeError(f'Expected {expected_count} occurrences, found {occurrences}')
+        replacement = new_text + anchor_text
+        updated = content.replace(anchor_text, replacement, expected_count)
+        file_path.write_text(updated, encoding='utf-8')
+        return json.dumps({'ok': True, 'path': path, 'occurrences': occurrences}, ensure_ascii=False)
+    except Exception as ex:
+        return json.dumps({'ok': False, 'error': str(ex)}, ensure_ascii=False)
+
+
+@server.tool(description='Insert text after a literal anchor in a repository file.')
+def insert_after(repo: str, path: str, anchor_text: str, new_text: str, expected_count: int = 1) -> str:
+    try:
+        file_path = resolve_repo_path(repo, path)
+        content = file_path.read_text(encoding='utf-8')
+        occurrences = content.count(anchor_text)
+        if occurrences != expected_count:
+            raise RuntimeError(f'Expected {expected_count} occurrences, found {occurrences}')
+        replacement = anchor_text + new_text
+        updated = content.replace(anchor_text, replacement, expected_count)
+        file_path.write_text(updated, encoding='utf-8')
+        return json.dumps({'ok': True, 'path': path, 'occurrences': occurrences}, ensure_ascii=False)
+    except Exception as ex:
+        return json.dumps({'ok': False, 'error': str(ex)}, ensure_ascii=False)
+
+
+@server.tool(description='Replace a line range around the first matching anchor line in a repository file.')
+def replace_near_anchor(repo: str,
+                        path: str,
+                        anchor_text: str,
+                        start_offset: int,
+                        end_offset: int,
+                        new_text: str,
+                        expected_anchor_count: int = 1) -> str:
+    try:
+        file_path = resolve_repo_path(repo, path)
+        lines = file_path.read_text(encoding='utf-8').splitlines(keepends=True)
+        matched_indices = [idx for idx, line in enumerate(lines) if anchor_text in line]
+        if len(matched_indices) != expected_anchor_count:
+            raise RuntimeError(f'Expected {expected_anchor_count} anchor matches, found {len(matched_indices)}')
+        anchor_idx = matched_indices[0]
+        start = max(0, anchor_idx + int(start_offset))
+        end = min(len(lines), anchor_idx + int(end_offset) + 1)
+        replacement = [] if new_text == '' else new_text.splitlines(keepends=True)
+        if new_text and not new_text.endswith('\n'):
+            replacement[-1] = replacement[-1] + '\n'
+        lines[start:end] = replacement
+        file_path.write_text(''.join(lines), encoding='utf-8')
+        return json.dumps(
+            {
+                'ok': True,
+                'path': path,
+                'anchor_line': anchor_idx + 1,
+                'start_line': start + 1,
+                'end_line': end,
+            },
+            ensure_ascii=False,
+        )
+    except Exception as ex:
+        return json.dumps({'ok': False, 'error': str(ex)}, ensure_ascii=False)
+
+
+@server.tool(description='List files in the repository using rg --files or find.')
+def list_files(repo: str, path_glob: str | None = None) -> str:
+    try:
+        if path_glob:
+            proc = run_in_repo(repo, ['rg', '--files', '-g', path_glob], check=False)
+            if proc.returncode not in (0, 1):
+                raise RuntimeError(proc.stderr.strip() or proc.stdout.strip())
+            files = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+        else:
+            proc = run_in_repo(repo, ['rg', '--files'], check=False)
+            if proc.returncode not in (0, 1):
+                raise RuntimeError(proc.stderr.strip() or proc.stdout.strip())
+            files = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+        return json.dumps({'ok': True, 'files': files[:500]}, ensure_ascii=False)
     except Exception as ex:
         return json.dumps({'ok': False, 'error': str(ex)}, ensure_ascii=False)
 
@@ -177,6 +355,50 @@ def apply_check(repo: str, patch_path: str) -> str:
                 'apply_ok': proc.returncode == 0,
                 'stderr': proc.stderr.strip(),
                 'stdout': proc.stdout.strip(),
+            },
+            ensure_ascii=False,
+        )
+    except Exception as ex:
+        return json.dumps({'ok': False, 'error': str(ex)}, ensure_ascii=False)
+
+
+@server.tool(description='Run a git command inside the repository.')
+def run_git(repo: str, args: List[str]) -> str:
+    try:
+        if not args:
+            raise RuntimeError('args must not be empty')
+        proc = run_in_repo(repo, ['git'] + args, check=False)
+        return json.dumps(
+            {
+                'ok': True,
+                'args': args,
+                'returncode': proc.returncode,
+                'stdout': proc.stdout,
+                'stderr': proc.stderr,
+            },
+            ensure_ascii=False,
+        )
+    except Exception as ex:
+        return json.dumps({'ok': False, 'error': str(ex)}, ensure_ascii=False)
+
+
+@server.tool(description='Run a shell command inside the repository.')
+def run_command(repo: str, command: str, timeout_sec: int = 30) -> str:
+    try:
+        proc = subprocess.run(['bash', '-lc', command],
+                              cwd=repo,
+                              text=True,
+                              capture_output=True,
+                              check=False,
+                              timeout=max(1, timeout_sec),
+                              env=os.environ.copy())
+        return json.dumps(
+            {
+                'ok': True,
+                'command': command,
+                'returncode': proc.returncode,
+                'stdout': proc.stdout,
+                'stderr': proc.stderr,
             },
             ensure_ascii=False,
         )

@@ -42,44 +42,6 @@ class CodeEditPlan(BaseModel):
     summary: str = ''
 
 
-class RetrievalEvidence(BaseModel):
-    strategy: str
-    reason: str
-    file_path: str
-    start_line: int
-    end_line: int
-    symbol_name: str = ''
-    hit_line: int = 0
-
-
-class HunkCoverageReport(BaseModel):
-    hunk_index: int
-    file_path: str
-    covered: bool = False
-    evidence: List[RetrievalEvidence] = Field(default_factory=list)
-    missing_anchors: List[str] = Field(default_factory=list)
-    notes: List[str] = Field(default_factory=list)
-
-
-class EntityCoverageReport(BaseModel):
-    entity_name: str
-    entity_type: str
-    found: bool = False
-    evidence: List[RetrievalEvidence] = Field(default_factory=list)
-    notes: List[str] = Field(default_factory=list)
-
-
-class RetrievalReport(BaseModel):
-    snippets: List[CodeSnippet] = Field(default_factory=list)
-    hunk_coverages: List[HunkCoverageReport] = Field(default_factory=list)
-    entity_coverages: List[EntityCoverageReport] = Field(default_factory=list)
-    missing_entities: List[str] = Field(default_factory=list)
-    added_macros: List[str] = Field(default_factory=list)
-    added_structs: List[str] = Field(default_factory=list)
-    added_functions: List[str] = Field(default_factory=list)
-    added_includes: List[str] = Field(default_factory=list)
-
-
 class RootCauseReport(BaseModel):
     vulnerability_type: str
     root_cause: str
@@ -168,7 +130,16 @@ class FixPlan(BaseModel):
         if value is None:
             return []
         if isinstance(value, list):
-            return value
+            normalized = []
+            for item in value:
+                if isinstance(item, str):
+                    normalized.append(item)
+                elif isinstance(item, dict):
+                    candidate = item.get('file_path') or item.get('path') or item.get('name') or item.get('file')
+                    normalized.append(candidate if candidate is not None else str(item))
+                else:
+                    normalized.append(str(item))
+            return normalized
         if isinstance(value, str):
             stripped = value.strip()
             if not stripped:
@@ -207,6 +178,24 @@ class SolverAttempt(BaseModel):
     patch_path: str
     apply_check_stderr: str = ''
     solver_raw_output: str = ''
+    verification_summary: str = ''
+    next_action: str = ''
+
+
+class KernelPatchSessionState(BaseModel):
+    iteration: int = 0
+    target_commit: str = ''
+    origin_patch: str = ''
+    commit_message: str = ''
+    changed_files: List[str] = Field(default_factory=list)
+    origin_hunks: List[PatchHunk] = Field(default_factory=list)
+    decoder_report: Optional[RootCauseReport] = None
+    fix_plan: Optional[FixPlan] = None
+    solver_output: str = ''
+    apply_ok: bool = False
+    apply_stderr: str = ''
+    diff_ok: bool = False
+    diff_check_stderr: str = ''
 
 
 class ToolTraceEntry(BaseModel):

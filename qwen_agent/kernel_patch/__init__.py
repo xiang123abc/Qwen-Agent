@@ -1,6 +1,6 @@
 from .agent import KernelPatchAgent
 from .config import KernelPatchConfig, KernelPatchLLMConfig
-from .models import FixPlan, KernelPatchRunResult, RootCauseReport, SolverAttempt
+from .models import FixPlan, KernelPatchRunResult, KernelPatchSessionState, RootCauseReport, SolverAttempt
 from .pipeline import KernelPatchPipeline
 from .runner import KernelPatchDatasetRunner
 
@@ -11,6 +11,7 @@ __all__ = [
     'KernelPatchDatasetRunner',
     'KernelPatchLLMConfig',
     'KernelPatchPipeline',
+    'KernelPatchSessionState',
     'KernelPatchRunResult',
     'RootCauseReport',
     'SolverAttempt',

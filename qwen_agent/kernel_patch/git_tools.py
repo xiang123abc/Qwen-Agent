@@ -80,6 +80,13 @@ class GitRepository:
     def resolve_commit(self, commit: str) -> str:
         return self.run(['git', 'rev-parse', commit]).stdout.strip()
 
+    def current_head(self) -> str:
+        return self.run(['git', 'rev-parse', 'HEAD']).stdout.strip()
+
+    def is_clean(self) -> bool:
+        proc = self.run(['git', 'status', '--porcelain'], check=False)
+        return not proc.stdout.strip()
+
     def commit_message(self, commit: str) -> str:
         return self.run(['git', 'show', '-s', '--format=%B', commit]).stdout.strip()
 
@@ -163,6 +170,9 @@ class GitRepository:
 
     def reset_hard(self, commit: str) -> None:
         self.run(['git', 'reset', '--hard', commit])
+
+    def checkout_detached(self, commit: str) -> None:
+        self.run(['git', 'checkout', '--detach', commit])
 
     def apply_code_edits(self, edits: List[CodeEdit]) -> None:
         grouped: Dict[str, List[CodeEdit]] = {}

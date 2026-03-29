@@ -12,7 +12,7 @@ from qwen_agent.kernel_patch.pipeline import KernelPatchPipeline
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Run a single Linux kernel CVE patch task from a JSON/JSON5 config.')
-    parser.add_argument('--config', required=True, help='Path to single-task JSON/JSON5 config')
+    parser.add_argument('--config', default="/root/qwen-agent/configs/kernel_patch_single.real.json", help='Path to single-task JSON/JSON5 config')
     parser.add_argument('--no-debug', action='store_true')
     args = parser.parse_args()
 

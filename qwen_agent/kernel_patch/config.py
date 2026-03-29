@@ -41,11 +41,25 @@ class KernelPatchConfig(BaseModel):
     agentic_retrieval: bool = True
     agentic_retrieval_max_tool_calls: int = 6
     agentic_retrieval_timeout_sec: int = 300
+    retriever_max_tool_calls: int = 6
+    planner_max_tool_calls: int = 0
+    solver_max_tool_calls: int = 8
+    max_repair_rounds: int = 2
     llm: Optional[KernelPatchLLMConfig] = None
 
-    @field_validator('max_iterations', 'agentic_retrieval_max_tool_calls', 'agentic_retrieval_timeout_sec')
+    @field_validator('max_iterations', 'agentic_retrieval_max_tool_calls', 'agentic_retrieval_timeout_sec',
+                     'retriever_max_tool_calls', 'planner_max_tool_calls', 'solver_max_tool_calls',
+                     'max_repair_rounds')
     @classmethod
     def validate_iterations(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError('value must be >= 0')
+        return value
+
+    @field_validator('max_iterations', 'agentic_retrieval_max_tool_calls', 'agentic_retrieval_timeout_sec',
+                     'retriever_max_tool_calls', 'solver_max_tool_calls', 'max_repair_rounds')
+    @classmethod
+    def validate_positive_iterations(cls, value: int) -> int:
         if value < 1:
             raise ValueError('value must be >= 1')
         return value
